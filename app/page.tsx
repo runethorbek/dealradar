@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 
 type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
+type Sort = "best_match" | "best_deal" | "newest";
 
 const sourceFilters: { label: string; value: Source | null }[] = [
   { label: "All", value: null },
@@ -12,7 +13,28 @@ const sourceFilters: { label: string; value: Source | null }[] = [
   { label: "Scarosso", value: "scarosso.com" },
 ];
 
-async function getLatestProducts(source: Source | null) {
+const sortOptions: { label: string; value: Sort }[] = [
+  { label: "Best match", value: "best_match" },
+  { label: "Best deal", value: "best_deal" },
+  { label: "Newest", value: "newest" },
+];
+
+function getDashboardHref(source: Source | null, sort: Sort) {
+  const params = new URLSearchParams();
+
+  if (source) {
+    params.set("source", source);
+  }
+
+  if (sort !== "best_match") {
+    params.set("sort", sort);
+  }
+
+  const query = params.toString();
+  return query ? `/?${query}` : "/";
+}
+
+async function getLatestProducts(source: Source | null, sort: Sort) {
   await connection();
 
   const databaseUrl = process.env.DATABASE_URL;
@@ -50,7 +72,15 @@ async function getLatestProducts(source: Source | null) {
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
           LEFT JOIN product_evaluations pe ON pe.product_id = p.id
           WHERE p.source = ${source}
-          ORDER BY p.last_seen_at DESC
+          ORDER BY
+            (pe.product_id IS NULL) ASC,
+            CASE
+              WHEN ${sort} = 'best_match'
+              THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
+            END DESC NULLS LAST,
+            CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
+            CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
+            p.last_seen_at DESC
           LIMIT 50
         `
       : await sql`
@@ -78,7 +108,15 @@ async function getLatestProducts(source: Source | null) {
           FROM products p
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
           LEFT JOIN product_evaluations pe ON pe.product_id = p.id
-          ORDER BY p.last_seen_at DESC
+          ORDER BY
+            (pe.product_id IS NULL) ASC,
+            CASE
+              WHEN ${sort} = 'best_match'
+              THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
+            END DESC NULLS LAST,
+            CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
+            CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
+            p.last_seen_at DESC
           LIMIT 50
         `;
 
@@ -89,13 +127,23 @@ async function getLatestProducts(source: Source | null) {
 }
 
 export default async function Home({ searchParams }: PageProps<"/">) {
-  const requestedSource = (await searchParams).source;
+  const query = await searchParams;
+  const requestedSource = query.source;
+  const requestedSort = query.sort;
   const selectedSource = sourceFilters.some(
     (filter) => filter.value === requestedSource,
   )
     ? (requestedSource as Source)
     : null;
-  const { products, failed } = await getLatestProducts(selectedSource);
+  const selectedSort = sortOptions.some(
+    (option) => option.value === requestedSort,
+  )
+    ? (requestedSort as Sort)
+    : "best_match";
+  const { products, failed } = await getLatestProducts(
+    selectedSource,
+    selectedSort,
+  );
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950">
@@ -129,26 +177,61 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           ) : null}
         </div>
 
-        <nav aria-label="Filter deals by source" className="mb-6 flex flex-wrap gap-2">
-          {sourceFilters.map((filter) => {
-            const isActive = filter.value === selectedSource;
+        <div className="mb-6 space-y-3">
+          <nav
+            aria-label="Filter deals by source"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
+              Source
+            </span>
+            {sourceFilters.map((filter) => {
+              const isActive = filter.value === selectedSource;
 
-            return (
-              <Link
-                key={filter.label}
-                href={filter.value ? `/?source=${filter.value}` : "/"}
-                aria-current={isActive ? "page" : undefined}
-                className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
-                  isActive
-                    ? "border-zinc-950 bg-zinc-950 text-white"
-                    : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-                }`}
-              >
-                {filter.label}
-              </Link>
-            );
-          })}
-        </nav>
+              return (
+                <Link
+                  key={filter.label}
+                  href={getDashboardHref(filter.value, selectedSort)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                    isActive
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                  }`}
+                >
+                  {filter.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <nav
+            aria-label="Sort deals"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
+              Sort
+            </span>
+            {sortOptions.map((option) => {
+              const isActive = option.value === selectedSort;
+
+              return (
+                <Link
+                  key={option.value}
+                  href={getDashboardHref(selectedSource, option.value)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                    isActive
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                  }`}
+                >
+                  {option.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
 
         {failed ? (
           <div className="rounded-xl border border-zinc-200 bg-white px-6 py-12 text-center shadow-sm">

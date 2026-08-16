@@ -91,6 +91,12 @@ function formatLastSeen(value: string) {
   }).format(date);
 }
 
+function getOverallScore(evaluation: ProductEvaluation) {
+  return Math.round(
+    evaluation.preferenceScore * 0.6 + evaluation.dealScore * 0.4,
+  );
+}
+
 export function ProductCard({ product }: { product: ProductCardProduct }) {
   const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
   const [saving, setSaving] = useState<Rating | null>(null);
@@ -215,6 +221,9 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
         {evaluation ? (
           <div>
             <div className="flex flex-wrap gap-2">
+              <span className="rounded-full bg-zinc-950 px-2.5 py-1 text-xs font-medium text-white">
+                Overall {getOverallScore(evaluation)}/10
+              </span>
               <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700">
                 Preference {evaluation.preferenceScore}/10
               </span>
@@ -246,16 +255,19 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
       </div>
 
       <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
-        <span className="mr-auto text-xs text-zinc-400">Was this useful?</span>
+        <span className="mr-auto text-xs text-zinc-400">
+          Do you like this product?
+        </span>
         {(["like", "dislike"] as const).map((rating) => {
           const isActive = feedback === rating;
           const isLike = rating === "like";
+          const label = isLike ? "Like" : "Not for me";
 
           return (
             <button
               key={rating}
               type="button"
-              aria-label={isLike ? "Like product" : "Dislike product"}
+              aria-label={label}
               aria-pressed={isActive}
               disabled={saving !== null}
               onClick={() => saveFeedback(rating)}
@@ -267,7 +279,7 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
                   : "border-zinc-200 bg-white hover:bg-zinc-50"
               }`}
             >
-              <span aria-hidden>{isLike ? "👍" : "👎"}</span>
+              {label}
             </button>
           );
         })}
