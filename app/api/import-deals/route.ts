@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { evaluateProduct } from "@/lib/product-evaluation";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +22,25 @@ type NormalizedProduct = {
   rawData: JsonObject;
 };
 
+type ImportResult = {
+  productId: string;
+  inserted: boolean;
+  snapshotId: string | null;
+  priceChanged: boolean;
+  priceDropPercent: string | null;
+  discountPercent: string | null;
+};
+
+type EvaluationCandidate = Pick<
+  ImportResult,
+  "productId" | "inserted" | "priceDropPercent" | "discountPercent"
+>;
+
 class SourceDataError extends Error {}
 
 const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
+const automaticEvaluationLimit = 50;
+const evaluationConcurrency = 5;
 
 const sources = [
   {
@@ -187,6 +204,119 @@ async function fetchSource(
   return normalizeProducts(await response.json(), definition);
 }
 
+function compareNullableNumbersDescending(
+  leftValue: string | null,
+  rightValue: string | null,
+) {
+  const left = leftValue === null ? null : Number(leftValue);
+  const right = rightValue === null ? null : Number(rightValue);
+
+  if (left === null && right === null) {
+    return 0;
+  }
+
+  if (left === null || !Number.isFinite(left)) {
+    return 1;
+  }
+
+  if (right === null || !Number.isFinite(right)) {
+    return -1;
+  }
+
+  return right - left;
+}
+
+function maxNullableNumber(
+  leftValue: string | null,
+  rightValue: string | null,
+) {
+  const left = leftValue === null ? null : Number(leftValue);
+  const right = rightValue === null ? null : Number(rightValue);
+
+  if (left === null || !Number.isFinite(left)) {
+    return rightValue;
+  }
+
+  if (right === null || !Number.isFinite(right)) {
+    return leftValue;
+  }
+
+  return right > left ? rightValue : leftValue;
+}
+
+function selectEvaluationCandidates(results: ImportResult[]) {
+  const candidatesByProduct = new Map<string, EvaluationCandidate>();
+
+  for (const result of results) {
+    if (!result.inserted && !result.priceChanged) {
+      continue;
+    }
+
+    const existing = candidatesByProduct.get(result.productId);
+
+    candidatesByProduct.set(result.productId, {
+      productId: result.productId,
+      inserted: result.inserted || existing?.inserted === true,
+      priceDropPercent: maxNullableNumber(
+        existing?.priceDropPercent ?? null,
+        result.priceDropPercent,
+      ),
+      discountPercent: maxNullableNumber(
+        existing?.discountPercent ?? null,
+        result.discountPercent,
+      ),
+    });
+  }
+
+  return [...candidatesByProduct.values()]
+    .sort((left, right) => {
+      if (left.inserted !== right.inserted) {
+        return left.inserted ? -1 : 1;
+      }
+
+      return (
+        compareNullableNumbersDescending(
+          left.priceDropPercent,
+          right.priceDropPercent,
+        ) ||
+        compareNullableNumbersDescending(
+          left.discountPercent,
+          right.discountPercent,
+        )
+      );
+    })
+    .slice(0, automaticEvaluationLimit);
+}
+
+async function evaluateCandidates(
+  candidates: EvaluationCandidate[],
+  databaseUrl: string,
+  apiKey: string | undefined,
+) {
+  if (!apiKey) {
+    return 0;
+  }
+
+  let evaluated = 0;
+
+  for (let index = 0; index < candidates.length; index += evaluationConcurrency) {
+    const batch = candidates.slice(index, index + evaluationConcurrency);
+    const results = await Promise.allSettled(
+      batch.map((candidate) =>
+        evaluateProduct({
+          productId: candidate.productId,
+          databaseUrl,
+          apiKey,
+        }),
+      ),
+    );
+
+    evaluated += results.filter((result) => result.status === "fulfilled").length;
+  }
+
+  return evaluated;
+}
+
 export async function POST(request: Request) {
   const ingestApiKey = process.env.INGEST_API_KEY;
   const authorization = request.headers.get("authorization");
@@ -234,7 +364,13 @@ export async function POST(request: Request) {
     const sql = neon(databaseUrl);
 
     const queries = products.map((product) => sql`
-      WITH upserted AS (
+      WITH existing AS MATERIALIZED (
+        SELECT id, current_price
+        FROM products
+        WHERE source = ${product.source}
+          AND external_url = ${product.externalUrl}
+      ),
+      upserted AS (
         INSERT INTO products (
           source,
           external_url,
@@ -281,7 +417,7 @@ export async function POST(request: Request) {
           category = EXCLUDED.category,
           last_seen_at = EXCLUDED.last_seen_at,
           raw_data = EXCLUDED.raw_data
-        RETURNING id, (xmax = 0) AS inserted
+        RETURNING id, current_price, discount_percent
       ),
       snapshot AS (
         INSERT INTO product_snapshots (
@@ -304,15 +440,45 @@ export async function POST(request: Request) {
         ON CONFLICT (product_id, observed_at) DO NOTHING
         RETURNING id
       )
-      SELECT upserted.inserted, snapshot.id AS "snapshotId"
+      SELECT
+        upserted.id::TEXT AS "productId",
+        (existing.id IS NULL) AS inserted,
+        snapshot.id::TEXT AS "snapshotId",
+        (
+          snapshot.id IS NOT NULL
+          AND existing.id IS NOT NULL
+          AND existing.current_price IS DISTINCT FROM upserted.current_price
+        ) AS "priceChanged",
+        CASE
+          WHEN existing.current_price > 0
+            AND upserted.current_price IS NOT NULL
+            AND upserted.current_price < existing.current_price
+          THEN (
+            (existing.current_price - upserted.current_price)
+            / existing.current_price
+            * 100
+          )::TEXT
+          ELSE NULL
+        END AS "priceDropPercent",
+        upserted.discount_percent::TEXT AS "discountPercent"
       FROM upserted
-      CROSS JOIN snapshot
+      LEFT JOIN existing ON existing.id = upserted.id
+      LEFT JOIN snapshot ON TRUE
     `);
 
     const results = queries.length ? await sql.transaction(queries) : [];
-    const productsInserted = results.filter(
-      (result) => result[0]?.inserted === true,
+    const importResults = results.flatMap((result) =>
+      result[0] ? [result[0] as ImportResult] : [],
+    );
+    const productsInserted = importResults.filter(
+      (result) => result.inserted,
     ).length;
+    const evaluationCandidates = selectEvaluationCandidates(importResults);
+    const productsEvaluated = await evaluateCandidates(
+      evaluationCandidates,
+      databaseUrl,
+      process.env.GEMINI_API_KEY,
+    );
 
     return Response.json({
       success: true,
@@ -321,7 +487,9 @@ export async function POST(request: Request) {
       productsProcessed: products.length,
       productsInserted,
       productsUpdated: products.length - productsInserted,
-      snapshotsInserted: results.filter((result) => result[0]?.snapshotId).length,
+      snapshotsInserted: importResults.filter((result) => result.snapshotId)
+        .length,
+      productsEvaluated,
     });
   } catch (error) {
     const message =
