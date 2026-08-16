@@ -1,8 +1,7 @@
-/* eslint-disable @next/next/no-img-element */
-
 import { neon } from "@neondatabase/serverless";
 import Link from "next/link";
 import { connection } from "next/server";
+import { ProductCard, type ProductCardProduct } from "./product-card";
 
 type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
 
@@ -13,26 +12,13 @@ const sourceFilters: { label: string; value: Source | null }[] = [
   { label: "Scarosso", value: "scarosso.com" },
 ];
 
-type Product = {
-  id: string;
-  externalUrl: string;
-  title: string;
-  imageUrl: string | null;
-  source: string;
-  currentPrice: string | null;
-  originalPrice: string | null;
-  currency: string | null;
-  discountPercent: string | null;
-  lastSeenAt: string;
-};
-
 async function getLatestProducts(source: Source | null) {
   await connection();
 
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { products: [] as Product[], failed: true };
+    return { products: [] as ProductCardProduct[], failed: true };
   }
 
   try {
@@ -40,83 +26,46 @@ async function getLatestProducts(source: Source | null) {
     const rows = source
       ? await sql`
           SELECT
-            id::TEXT AS id,
-            external_url AS "externalUrl",
-            title,
-            image_url AS "imageUrl",
-            source,
-            current_price::TEXT AS "currentPrice",
-            original_price::TEXT AS "originalPrice",
-            currency,
-            discount_percent::TEXT AS "discountPercent",
-            last_seen_at::TEXT AS "lastSeenAt"
-          FROM products
-          WHERE source = ${source}
-          ORDER BY last_seen_at DESC
+            p.id::TEXT AS id,
+            p.external_url AS "externalUrl",
+            p.title,
+            p.image_url AS "imageUrl",
+            p.source,
+            p.current_price::TEXT AS "currentPrice",
+            p.original_price::TEXT AS "originalPrice",
+            p.currency,
+            p.discount_percent::TEXT AS "discountPercent",
+            p.last_seen_at::TEXT AS "lastSeenAt",
+            pf.rating AS feedback
+          FROM products p
+          LEFT JOIN product_feedback pf ON pf.product_id = p.id
+          WHERE p.source = ${source}
+          ORDER BY p.last_seen_at DESC
           LIMIT 50
         `
       : await sql`
           SELECT
-            id::TEXT AS id,
-            external_url AS "externalUrl",
-            title,
-            image_url AS "imageUrl",
-            source,
-            current_price::TEXT AS "currentPrice",
-            original_price::TEXT AS "originalPrice",
-            currency,
-            discount_percent::TEXT AS "discountPercent",
-            last_seen_at::TEXT AS "lastSeenAt"
-          FROM products
-          ORDER BY last_seen_at DESC
+            p.id::TEXT AS id,
+            p.external_url AS "externalUrl",
+            p.title,
+            p.image_url AS "imageUrl",
+            p.source,
+            p.current_price::TEXT AS "currentPrice",
+            p.original_price::TEXT AS "originalPrice",
+            p.currency,
+            p.discount_percent::TEXT AS "discountPercent",
+            p.last_seen_at::TEXT AS "lastSeenAt",
+            pf.rating AS feedback
+          FROM products p
+          LEFT JOIN product_feedback pf ON pf.product_id = p.id
+          ORDER BY p.last_seen_at DESC
           LIMIT 50
         `;
 
-    return { products: rows as Product[], failed: false };
+    return { products: rows as ProductCardProduct[], failed: false };
   } catch {
-    return { products: [] as Product[], failed: true };
+    return { products: [] as ProductCardProduct[], failed: true };
   }
-}
-
-function formatPrice(value: string | null, currency: string | null) {
-  if (value === null) {
-    return "Price unavailable";
-  }
-
-  const amount = Number(value);
-
-  if (!Number.isFinite(amount)) {
-    return value;
-  }
-
-  if (currency) {
-    try {
-      return new Intl.NumberFormat("en", {
-        style: "currency",
-        currency,
-      }).format(amount);
-    } catch {
-      // Fall through when a source provides a non-standard currency code.
-    }
-  }
-
-  return new Intl.NumberFormat("en", {
-    maximumFractionDigits: 2,
-  }).format(amount);
-}
-
-function formatLastSeen(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(date);
 }
 
 export default async function Home({ searchParams }: PageProps<"/">) {
@@ -190,63 +139,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         ) : (
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {products.map((product) => (
-              <a
-                key={product.id}
-                href={product.externalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
-              >
-                <div className="aspect-[4/3] overflow-hidden bg-zinc-100">
-                  {product.imageUrl ? (
-                    <img
-                      src={product.imageUrl}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
-                    />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-zinc-400">
-                      No image
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                      {product.source}
-                    </p>
-                    {product.discountPercent !== null ? (
-                      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
-                        -{Number(product.discountPercent).toLocaleString("en", {
-                          maximumFractionDigits: 1,
-                        })}
-                        %
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <h3 className="mt-2 line-clamp-2 min-h-12 text-base font-semibold leading-6 tracking-tight group-hover:text-zinc-600">
-                    {product.title}
-                  </h3>
-
-                  <div className="mt-4 flex items-baseline gap-2">
-                    <p className="font-semibold">
-                      {formatPrice(product.currentPrice, product.currency)}
-                    </p>
-                    {product.originalPrice !== null ? (
-                      <p className="text-sm text-zinc-400 line-through">
-                        {formatPrice(product.originalPrice, product.currency)}
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <p className="mt-4 border-t border-zinc-100 pt-4 text-xs text-zinc-400">
-                    Last seen {formatLastSeen(product.lastSeenAt)} UTC
-                  </p>
-                </div>
-              </a>
+              <ProductCard key={product.id} product={product} />
             ))}
           </div>
         )}
