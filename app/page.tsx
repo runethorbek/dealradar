@@ -85,6 +85,12 @@ export default async function Home({ searchParams }: PageProps<"/">) {
             D
           </span>
           <h1 className="ml-3 text-lg font-semibold tracking-tight">DealRadar</h1>
+          <Link
+            href="/preferences"
+            className="ml-auto text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
+          >
+            Preferences
+          </Link>
         </div>
       </header>
 
