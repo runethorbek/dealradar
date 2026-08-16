@@ -23,26 +23,40 @@ type NormalizedProduct = {
 
 class SourceDataError extends Error {}
 
+const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
+
 const sources = [
   {
     name: "Scarosso",
     fallbackSource: "scarosso.com",
-    url: "https://raw.githubusercontent.com/runethorbek/deals/main/public/deals/scarosso-latest.json",
+    fileName: "scarosso-latest.json",
     priceField: "current_price",
   },
   {
     name: "Zalando",
     fallbackSource: "zalando.dk",
-    url: "https://raw.githubusercontent.com/runethorbek/deals/main/public/deals/zalando-latest.json",
+    fileName: "zalando-latest.json",
     priceField: "current_price",
   },
   {
     name: "Vinted",
     fallbackSource: "vinted.com",
-    url: "https://raw.githubusercontent.com/runethorbek/deals/main/public/deals/vinted-latest.json",
+    fileName: "vinted-latest.json",
     priceField: "price",
   },
 ] as const;
+
+function isValidGitRef(ref: string) {
+  const hasSafeCharacters = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref);
+  const hasInvalidPath =
+    ref.includes("..") ||
+    ref.includes("//") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".") ||
+    ref.split("/").some((part) => part.endsWith(".lock"));
+
+  return hasSafeCharacters && !hasInvalidPath;
+}
 
 function asObject(value: unknown, context: string): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -157,8 +171,12 @@ function normalizeProducts(
   });
 }
 
-async function fetchSource(definition: (typeof sources)[number]) {
-  const response = await fetch(definition.url, { cache: "no-store" });
+async function fetchSource(
+  definition: (typeof sources)[number],
+  ref: string,
+) {
+  const url = `${repositoryUrl}/${ref}/public/deals/${definition.fileName}`;
+  const response = await fetch(url, { cache: "no-store" });
 
   if (!response.ok) {
     throw new SourceDataError(
@@ -183,12 +201,25 @@ export async function POST(request: Request) {
     );
   }
 
+  const ref = new URL(request.url).searchParams.get("ref") ?? "main";
+
+  if (!isValidGitRef(ref)) {
+    return Response.json(
+      {
+        success: false,
+        error: "Invalid ref.",
+      },
+      { status: 400 },
+    );
+  }
+
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
     return Response.json(
       {
         success: false,
+        ref,
         error: "DATABASE_URL is not configured on the server.",
       },
       { status: 500 },
@@ -196,7 +227,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const productsBySource = await Promise.all(sources.map(fetchSource));
+    const productsBySource = await Promise.all(
+      sources.map((source) => fetchSource(source, ref)),
+    );
     const products = productsBySource.flat();
     const sql = neon(databaseUrl);
 
@@ -283,6 +316,7 @@ export async function POST(request: Request) {
 
     return Response.json({
       success: true,
+      ref,
       sources: sources.length,
       productsProcessed: products.length,
       productsInserted,
@@ -298,6 +332,7 @@ export async function POST(request: Request) {
     return Response.json(
       {
         success: false,
+        ref,
         error: message,
       },
       { status: 500 },
