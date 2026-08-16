@@ -36,9 +36,19 @@ async function getLatestProducts(source: Source | null) {
             p.currency,
             p.discount_percent::TEXT AS "discountPercent",
             p.last_seen_at::TEXT AS "lastSeenAt",
-            pf.rating AS feedback
+            pf.rating AS feedback,
+            CASE
+              WHEN pe.product_id IS NULL THEN NULL
+              ELSE json_build_object(
+                'preferenceScore', pe.preference_score,
+                'dealScore', pe.deal_score,
+                'reason', pe.reason,
+                'evaluatedAt', pe.evaluated_at::TEXT
+              )
+            END AS evaluation
           FROM products p
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
+          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
           WHERE p.source = ${source}
           ORDER BY p.last_seen_at DESC
           LIMIT 50
@@ -55,9 +65,19 @@ async function getLatestProducts(source: Source | null) {
             p.currency,
             p.discount_percent::TEXT AS "discountPercent",
             p.last_seen_at::TEXT AS "lastSeenAt",
-            pf.rating AS feedback
+            pf.rating AS feedback,
+            CASE
+              WHEN pe.product_id IS NULL THEN NULL
+              ELSE json_build_object(
+                'preferenceScore', pe.preference_score,
+                'dealScore', pe.deal_score,
+                'reason', pe.reason,
+                'evaluatedAt', pe.evaluated_at::TEXT
+              )
+            END AS evaluation
           FROM products p
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
+          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
           ORDER BY p.last_seen_at DESC
           LIMIT 50
         `;

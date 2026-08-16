@@ -6,6 +6,13 @@ import { useState } from "react";
 
 export type Rating = "like" | "dislike";
 
+export type ProductEvaluation = {
+  preferenceScore: number;
+  dealScore: number;
+  reason: string;
+  evaluatedAt: string;
+};
+
 export type ProductCardProduct = {
   id: string;
   externalUrl: string;
@@ -18,7 +25,30 @@ export type ProductCardProduct = {
   discountPercent: string | null;
   lastSeenAt: string;
   feedback: Rating | null;
+  evaluation: ProductEvaluation | null;
 };
+
+function isProductEvaluation(value: unknown): value is ProductEvaluation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const evaluation = value as Record<string, unknown>;
+
+  return (
+    typeof evaluation.preferenceScore === "number" &&
+    Number.isInteger(evaluation.preferenceScore) &&
+    evaluation.preferenceScore >= 0 &&
+    evaluation.preferenceScore <= 10 &&
+    typeof evaluation.dealScore === "number" &&
+    Number.isInteger(evaluation.dealScore) &&
+    evaluation.dealScore >= 0 &&
+    evaluation.dealScore <= 10 &&
+    typeof evaluation.reason === "string" &&
+    evaluation.reason.length > 0 &&
+    typeof evaluation.evaluatedAt === "string"
+  );
+}
 
 function formatPrice(value: string | null, currency: string | null) {
   if (value === null) {
@@ -65,6 +95,35 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
   const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
   const [saving, setSaving] = useState<Rating | null>(null);
   const [failed, setFailed] = useState(false);
+  const [evaluation, setEvaluation] = useState<ProductEvaluation | null>(
+    product.evaluation,
+  );
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluationFailed, setEvaluationFailed] = useState(false);
+
+  async function evaluateProduct() {
+    setEvaluating(true);
+    setEvaluationFailed(false);
+
+    try {
+      const response = await fetch("/api/evaluate-product", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id }),
+      });
+      const result = (await response.json()) as { evaluation?: unknown };
+
+      if (!response.ok || !isProductEvaluation(result.evaluation)) {
+        throw new Error("Evaluation request failed.");
+      }
+
+      setEvaluation(result.evaluation);
+    } catch {
+      setEvaluationFailed(true);
+    } finally {
+      setEvaluating(false);
+    }
+  }
 
   async function saveFeedback(rating: Rating) {
     setSaving(rating);
@@ -151,6 +210,40 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
           </p>
         </div>
       </a>
+
+      <div className="border-t border-zinc-100 px-5 py-4">
+        {evaluation ? (
+          <div>
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700">
+                Preference {evaluation.preferenceScore}/10
+              </span>
+              <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700">
+                Deal {evaluation.dealScore}/10
+              </span>
+            </div>
+            <p className="mt-3 text-sm leading-5 text-zinc-600">
+              {evaluation.reason}
+            </p>
+          </div>
+        ) : (
+          <div>
+            <button
+              type="button"
+              disabled={evaluating}
+              onClick={evaluateProduct}
+              className="rounded-md bg-zinc-950 px-3 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {evaluating ? "Evaluating..." : "Evaluate"}
+            </button>
+            {evaluationFailed ? (
+              <p className="mt-2 text-xs text-rose-600" role="status">
+                Could not evaluate this product.
+              </p>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
         <span className="mr-auto text-xs text-zinc-400">Was this useful?</span>
