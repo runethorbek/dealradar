@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
+import { postSlackMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -479,6 +480,28 @@ export async function POST(request: Request) {
       databaseUrl,
       process.env.GEMINI_API_KEY,
     );
+    const productsUpdated = products.length - productsInserted;
+    const snapshotsInserted = importResults.filter(
+      (result) => result.snapshotId,
+    ).length;
+    const slackMessage =
+      `DealRadar updated (${ref}): ${products.length} processed` +
+      ` · ${productsInserted} new` +
+      ` · ${productsUpdated} updated` +
+      ` · ${snapshotsInserted} snapshots` +
+      ` · ${productsEvaluated} evaluated`;
+
+    try {
+      const slackResult = await postSlackMessage(slackMessage);
+
+      if (!slackResult.success) {
+        console.warn(
+          `DealRadar Slack notification failed: ${slackResult.error}.`,
+        );
+      }
+    } catch {
+      console.warn("DealRadar Slack notification failed: unexpected_error.");
+    }
 
     return Response.json({
       success: true,
@@ -486,9 +509,8 @@ export async function POST(request: Request) {
       sources: sources.length,
       productsProcessed: products.length,
       productsInserted,
-      productsUpdated: products.length - productsInserted,
-      snapshotsInserted: importResults.filter((result) => result.snapshotId)
-        .length,
+      productsUpdated,
+      snapshotsInserted,
       productsEvaluated,
     });
   } catch (error) {
