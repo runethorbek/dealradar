@@ -1,7 +1,17 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { neon } from "@neondatabase/serverless";
+import Link from "next/link";
 import { connection } from "next/server";
+
+type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
+
+const sourceFilters: { label: string; value: Source | null }[] = [
+  { label: "All", value: null },
+  { label: "Vinted", value: "vinted.com" },
+  { label: "Zalando", value: "zalando.dk" },
+  { label: "Scarosso", value: "scarosso.com" },
+];
 
 type Product = {
   id: string;
@@ -16,7 +26,7 @@ type Product = {
   lastSeenAt: string;
 };
 
-async function getLatestProducts() {
+async function getLatestProducts(source: Source | null) {
   await connection();
 
   const databaseUrl = process.env.DATABASE_URL;
@@ -27,22 +37,40 @@ async function getLatestProducts() {
 
   try {
     const sql = neon(databaseUrl);
-    const rows = await sql`
-      SELECT
-        id::TEXT AS id,
-        external_url AS "externalUrl",
-        title,
-        image_url AS "imageUrl",
-        source,
-        current_price::TEXT AS "currentPrice",
-        original_price::TEXT AS "originalPrice",
-        currency,
-        discount_percent::TEXT AS "discountPercent",
-        last_seen_at::TEXT AS "lastSeenAt"
-      FROM products
-      ORDER BY last_seen_at DESC
-      LIMIT 50
-    `;
+    const rows = source
+      ? await sql`
+          SELECT
+            id::TEXT AS id,
+            external_url AS "externalUrl",
+            title,
+            image_url AS "imageUrl",
+            source,
+            current_price::TEXT AS "currentPrice",
+            original_price::TEXT AS "originalPrice",
+            currency,
+            discount_percent::TEXT AS "discountPercent",
+            last_seen_at::TEXT AS "lastSeenAt"
+          FROM products
+          WHERE source = ${source}
+          ORDER BY last_seen_at DESC
+          LIMIT 50
+        `
+      : await sql`
+          SELECT
+            id::TEXT AS id,
+            external_url AS "externalUrl",
+            title,
+            image_url AS "imageUrl",
+            source,
+            current_price::TEXT AS "currentPrice",
+            original_price::TEXT AS "originalPrice",
+            currency,
+            discount_percent::TEXT AS "discountPercent",
+            last_seen_at::TEXT AS "lastSeenAt"
+          FROM products
+          ORDER BY last_seen_at DESC
+          LIMIT 50
+        `;
 
     return { products: rows as Product[], failed: false };
   } catch {
@@ -91,8 +119,14 @@ function formatLastSeen(value: string) {
   }).format(date);
 }
 
-export default async function Home() {
-  const { products, failed } = await getLatestProducts();
+export default async function Home({ searchParams }: PageProps<"/">) {
+  const requestedSource = (await searchParams).source;
+  const selectedSource = sourceFilters.some(
+    (filter) => filter.value === requestedSource,
+  )
+    ? (requestedSource as Source)
+    : null;
+  const { products, failed } = await getLatestProducts(selectedSource);
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950">
@@ -119,6 +153,27 @@ export default async function Home() {
             </p>
           ) : null}
         </div>
+
+        <nav aria-label="Filter deals by source" className="mb-6 flex flex-wrap gap-2">
+          {sourceFilters.map((filter) => {
+            const isActive = filter.value === selectedSource;
+
+            return (
+              <Link
+                key={filter.label}
+                href={filter.value ? `/?source=${filter.value}` : "/"}
+                aria-current={isActive ? "page" : undefined}
+                className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+                  isActive
+                    ? "border-zinc-950 bg-zinc-950 text-white"
+                    : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                }`}
+              >
+                {filter.label}
+              </Link>
+            );
+          })}
+        </nav>
 
         {failed ? (
           <div className="rounded-xl border border-zinc-200 bg-white px-6 py-12 text-center shadow-sm">
