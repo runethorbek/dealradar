@@ -1,6 +1,10 @@
 import { neon } from "@neondatabase/serverless";
 import Link from "next/link";
 import { connection } from "next/server";
+import {
+  includeRequestedProduct,
+  parseProductId,
+} from "@/lib/dashboard-products.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 
 type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
@@ -34,7 +38,11 @@ function getDashboardHref(source: Source | null, sort: Sort) {
   return query ? `/?${query}` : "/";
 }
 
-async function getLatestProducts(source: Source | null, sort: Sort) {
+async function getLatestProducts(
+  source: Source | null,
+  sort: Sort,
+  highlightedProductId: string | null,
+) {
   await connection();
 
   const databaseUrl = process.env.DATABASE_URL;
@@ -120,7 +128,50 @@ async function getLatestProducts(source: Source | null, sort: Sort) {
           LIMIT 50
         `;
 
-    return { products: rows as ProductCardProduct[], failed: false };
+    const products = rows as ProductCardProduct[];
+
+    if (
+      !highlightedProductId ||
+      products.some((product) => product.id === highlightedProductId)
+    ) {
+      return { products, failed: false };
+    }
+
+    const [highlightedProduct] = await sql`
+      SELECT
+        p.id::TEXT AS id,
+        p.external_url AS "externalUrl",
+        p.title,
+        p.image_url AS "imageUrl",
+        p.source,
+        p.current_price::TEXT AS "currentPrice",
+        p.original_price::TEXT AS "originalPrice",
+        p.currency,
+        p.discount_percent::TEXT AS "discountPercent",
+        p.last_seen_at::TEXT AS "lastSeenAt",
+        pf.rating AS feedback,
+        CASE
+          WHEN pe.product_id IS NULL THEN NULL
+          ELSE json_build_object(
+            'preferenceScore', pe.preference_score,
+            'dealScore', pe.deal_score,
+            'reason', pe.reason,
+            'evaluatedAt', pe.evaluated_at::TEXT
+          )
+        END AS evaluation
+      FROM products p
+      LEFT JOIN product_feedback pf ON pf.product_id = p.id
+      LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+      WHERE p.id = ${highlightedProductId}
+    `;
+
+    return {
+      products: includeRequestedProduct(
+        products,
+        highlightedProduct as ProductCardProduct | undefined,
+      ),
+      failed: false,
+    };
   } catch {
     return { products: [] as ProductCardProduct[], failed: true };
   }
@@ -130,6 +181,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const query = await searchParams;
   const requestedSource = query.source;
   const requestedSort = query.sort;
+  const highlightedProductId = parseProductId(query.product);
   const selectedSource = sourceFilters.some(
     (filter) => filter.value === requestedSource,
   )
@@ -143,6 +195,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const { products, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
+    highlightedProductId,
   );
 
   return (

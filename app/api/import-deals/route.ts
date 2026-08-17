@@ -1,6 +1,11 @@
 import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
 import {
+  formatImportSlackMessage,
+  selectTopRecommendation,
+  type ImportRecommendation,
+} from "@/lib/import-notification.mts";
+import {
   normalizeScarossoPrices,
   parseUsdToDkkRate,
 } from "@/lib/price-normalization.mts";
@@ -32,6 +37,11 @@ type NormalizedProduct = {
 
 type ImportResult = {
   productId: string;
+  title: string;
+  currentPrice: string | null;
+  currency: string | null;
+  sourceCurrentPrice: string | null;
+  sourceCurrency: string | null;
   inserted: boolean;
   snapshotId: string | null;
   priceChanged: boolean;
@@ -41,7 +51,15 @@ type ImportResult = {
 
 type EvaluationCandidate = Pick<
   ImportResult,
-  "productId" | "inserted" | "priceDropPercent" | "discountPercent"
+  | "productId"
+  | "title"
+  | "currentPrice"
+  | "currency"
+  | "sourceCurrentPrice"
+  | "sourceCurrency"
+  | "inserted"
+  | "priceDropPercent"
+  | "discountPercent"
 >;
 
 class SourceDataError extends Error {}
@@ -331,6 +349,11 @@ function selectEvaluationCandidates(results: ImportResult[]) {
 
     candidatesByProduct.set(result.productId, {
       productId: result.productId,
+      title: result.title,
+      currentPrice: result.currentPrice,
+      currency: result.currency,
+      sourceCurrentPrice: result.sourceCurrentPrice,
+      sourceCurrency: result.sourceCurrency,
       inserted: result.inserted || existing?.inserted === true,
       priceDropPercent: maxNullableNumber(
         existing?.priceDropPercent ?? null,
@@ -369,24 +392,39 @@ async function evaluateCandidates(
   apiKey: string | undefined,
 ) {
   if (!apiKey) {
-    return 0;
+    return [];
   }
 
-  let evaluated = 0;
+  const evaluated: ImportRecommendation[] = [];
 
   for (let index = 0; index < candidates.length; index += evaluationConcurrency) {
     const batch = candidates.slice(index, index + evaluationConcurrency);
     const results = await Promise.allSettled(
-      batch.map((candidate) =>
-        evaluateProduct({
+      batch.map(async (candidate) => {
+        const evaluation = await evaluateProduct({
           productId: candidate.productId,
           databaseUrl,
           apiKey,
-        }),
-      ),
+        });
+
+        return {
+          productId: candidate.productId,
+          title: candidate.title,
+          currentPrice: candidate.currentPrice,
+          currency: candidate.currency,
+          sourceCurrentPrice: candidate.sourceCurrentPrice,
+          sourceCurrency: candidate.sourceCurrency,
+          preferenceScore: evaluation.preferenceScore,
+          dealScore: evaluation.dealScore,
+        };
+      }),
     );
 
-    evaluated += results.filter((result) => result.status === "fulfilled").length;
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        evaluated.push(result.value);
+      }
+    }
   }
 
   return evaluated;
@@ -520,8 +558,11 @@ export async function POST(request: Request) {
           raw_data = EXCLUDED.raw_data
         RETURNING
           id,
+          title,
           current_price,
+          currency,
           source_current_price,
+          source_currency,
           discount_percent
       ),
       snapshot AS (
@@ -553,6 +594,11 @@ export async function POST(request: Request) {
       )
       SELECT
         upserted.id::TEXT AS "productId",
+        upserted.title,
+        upserted.current_price::TEXT AS "currentPrice",
+        upserted.currency,
+        upserted.source_current_price::TEXT AS "sourceCurrentPrice",
+        upserted.source_currency AS "sourceCurrency",
         (existing.id IS NULL) AS inserted,
         snapshot.id::TEXT AS "snapshotId",
         (
@@ -602,21 +648,28 @@ export async function POST(request: Request) {
       (result) => result.inserted,
     ).length;
     const evaluationCandidates = selectEvaluationCandidates(importResults);
-    const productsEvaluated = await evaluateCandidates(
+    const evaluatedProducts = await evaluateCandidates(
       evaluationCandidates,
       databaseUrl,
       process.env.GEMINI_API_KEY,
     );
+    const productsEvaluated = evaluatedProducts.length;
     const productsUpdated = products.length - productsInserted;
     const snapshotsInserted = importResults.filter(
       (result) => result.snapshotId,
     ).length;
-    const slackMessage =
-      `DealRadar updated (${ref}): ${products.length} processed` +
-      ` · ${productsInserted} new` +
-      ` · ${productsUpdated} updated` +
-      ` · ${snapshotsInserted} snapshots` +
-      ` · ${productsEvaluated} evaluated`;
+    const slackMessage = formatImportSlackMessage(
+      {
+        ref,
+        productsProcessed: products.length,
+        productsInserted,
+        productsUpdated,
+        snapshotsInserted,
+        productsEvaluated,
+      },
+      selectTopRecommendation(evaluatedProducts),
+      new URL(request.url).origin,
+    );
 
     try {
       const slackResult = await postSlackMessage(slackMessage);

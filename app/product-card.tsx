@@ -159,7 +159,10 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
   }
 
   return (
-    <article className="group overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md">
+    <article
+      id={`product-${product.id}`}
+      className="group scroll-mt-6 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
+    >
       <a
         href={product.externalUrl}
         target="_blank"
