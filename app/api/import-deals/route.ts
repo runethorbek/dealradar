@@ -1,5 +1,9 @@
 import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
+import {
+  normalizeScarossoPrices,
+  parseUsdToDkkRate,
+} from "@/lib/price-normalization.mts";
 import { postSlackMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +18,9 @@ type NormalizedProduct = {
   currentPrice: number | null;
   originalPrice: number | null;
   currency: string | null;
+  sourceCurrentPrice: number | null;
+  sourceOriginalPrice: number | null;
+  sourceCurrency: string | null;
   discountPercent: number | null;
   targetSize: string | null;
   available: boolean | null;
@@ -40,6 +47,8 @@ type EvaluationCandidate = Pick<
 class SourceDataError extends Error {}
 
 const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
+const usdToDkkRateUrl =
+  "https://api.frankfurter.dev/v2/rate/USD/DKK?providers=DNB";
 const automaticEvaluationLimit = 50;
 const evaluationConcurrency = 5;
 
@@ -118,6 +127,7 @@ function validTimestamp(...values: unknown[]) {
 function normalizeProducts(
   payloadValue: unknown,
   definition: (typeof sources)[number],
+  usdToDkkRate: number | null,
 ) {
   const payload = asObject(payloadValue, `${definition.name} feed`);
 
@@ -142,7 +152,9 @@ function normalizeProducts(
     const externalUrl = optionalString(product.url);
     const title = optionalString(product.title);
     const imageUrl = optionalString(product.image);
-    const currentPrice = optionalNumber(product[definition.priceField]);
+    const sourceCurrentPrice = optionalNumber(product[definition.priceField]);
+    const sourceOriginalPrice = optionalNumber(product.original_price);
+    const sourceCurrency = optionalString(product.currency);
 
     if (!externalUrl || !title) {
       return [];
@@ -169,15 +181,36 @@ function normalizeProducts(
       : [];
     const category =
       optionalString(product.category) ?? optionalString(categories[0]);
+    const prices =
+      definition.name === "Scarosso"
+        ? normalizeScarossoPrices(
+            {
+              currentPrice: sourceCurrentPrice,
+              originalPrice: sourceOriginalPrice,
+              currency: sourceCurrency,
+            },
+            usdToDkkRate,
+          )
+        : {
+            currentPrice: sourceCurrentPrice,
+            originalPrice: sourceOriginalPrice,
+            currency: sourceCurrency,
+            sourceCurrentPrice: null,
+            sourceOriginalPrice: null,
+            sourceCurrency: null,
+          };
 
     return [{
       source,
       externalUrl,
       title,
       imageUrl,
-      currentPrice,
-      originalPrice: optionalNumber(product.original_price),
-      currency: optionalString(product.currency),
+      currentPrice: prices.currentPrice,
+      originalPrice: prices.originalPrice,
+      currency: prices.currency,
+      sourceCurrentPrice: prices.sourceCurrentPrice,
+      sourceOriginalPrice: prices.sourceOriginalPrice,
+      sourceCurrency: prices.sourceCurrency,
       discountPercent: optionalNumber(product.discount_percent),
       targetSize,
       available,
@@ -189,7 +222,7 @@ function normalizeProducts(
   });
 }
 
-async function fetchSource(
+async function fetchSourcePayload(
   definition: (typeof sources)[number],
   ref: string,
 ) {
@@ -202,7 +235,48 @@ async function fetchSource(
     );
   }
 
-  return normalizeProducts(await response.json(), definition);
+  return response.json() as Promise<unknown>;
+}
+
+function sourceContainsCurrency(payloadValue: unknown, currency: string) {
+  if (
+    typeof payloadValue !== "object" ||
+    payloadValue === null ||
+    Array.isArray(payloadValue)
+  ) {
+    return false;
+  }
+
+  const products = (payloadValue as JsonObject).products;
+
+  return (
+    Array.isArray(products) &&
+    products.some(
+      (product) =>
+        typeof product === "object" &&
+        product !== null &&
+        !Array.isArray(product) &&
+        optionalString((product as JsonObject).currency)?.toUpperCase() ===
+          currency,
+    )
+  );
+}
+
+async function fetchUsdToDkkRate() {
+  try {
+    const response = await fetch(usdToDkkRateUrl, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return parseUsdToDkkRate(await response.json());
+  } catch {
+    return null;
+  }
 }
 
 function compareNullableNumbersDescending(
@@ -358,15 +432,32 @@ export async function POST(request: Request) {
   }
 
   try {
-    const productsBySource = await Promise.all(
-      sources.map((source) => fetchSource(source, ref)),
+    const sourcePayloads = await Promise.all(
+      sources.map((source) => fetchSourcePayload(source, ref)),
+    );
+    const scarossoNeedsUsdRate = sourceContainsCurrency(
+      sourcePayloads[0],
+      "USD",
+    );
+    const usdToDkkRate = scarossoNeedsUsdRate
+      ? await fetchUsdToDkkRate()
+      : null;
+
+    if (scarossoNeedsUsdRate && usdToDkkRate === null) {
+      console.warn(
+        "DealRadar USD to DKK rate lookup failed; source prices were preserved.",
+      );
+    }
+
+    const productsBySource = sourcePayloads.map((payload, index) =>
+      normalizeProducts(payload, sources[index], usdToDkkRate),
     );
     const products = productsBySource.flat();
     const sql = neon(databaseUrl);
 
     const queries = products.map((product) => sql`
       WITH existing AS MATERIALIZED (
-        SELECT id, current_price
+        SELECT id, current_price, source_current_price
         FROM products
         WHERE source = ${product.source}
           AND external_url = ${product.externalUrl}
@@ -380,6 +471,9 @@ export async function POST(request: Request) {
           current_price,
           original_price,
           currency,
+          source_current_price,
+          source_original_price,
+          source_currency,
           discount_percent,
           target_size,
           available,
@@ -396,6 +490,9 @@ export async function POST(request: Request) {
           ${product.currentPrice},
           ${product.originalPrice},
           ${product.currency},
+          ${product.sourceCurrentPrice},
+          ${product.sourceOriginalPrice},
+          ${product.sourceCurrency},
           ${product.discountPercent},
           ${product.targetSize},
           ${product.available},
@@ -411,6 +508,9 @@ export async function POST(request: Request) {
           current_price = EXCLUDED.current_price,
           original_price = EXCLUDED.original_price,
           currency = EXCLUDED.currency,
+          source_current_price = EXCLUDED.source_current_price,
+          source_original_price = EXCLUDED.source_original_price,
+          source_currency = EXCLUDED.source_currency,
           discount_percent = EXCLUDED.discount_percent,
           target_size = EXCLUDED.target_size,
           available = EXCLUDED.available,
@@ -418,7 +518,11 @@ export async function POST(request: Request) {
           category = EXCLUDED.category,
           last_seen_at = EXCLUDED.last_seen_at,
           raw_data = EXCLUDED.raw_data
-        RETURNING id, current_price, discount_percent
+        RETURNING
+          id,
+          current_price,
+          source_current_price,
+          discount_percent
       ),
       snapshot AS (
         INSERT INTO product_snapshots (
@@ -426,6 +530,9 @@ export async function POST(request: Request) {
           observed_at,
           current_price,
           original_price,
+          source_current_price,
+          source_original_price,
+          source_currency,
           discount_percent,
           available
         )
@@ -434,6 +541,9 @@ export async function POST(request: Request) {
           ${product.observedAt},
           ${product.currentPrice},
           ${product.originalPrice},
+          ${product.sourceCurrentPrice},
+          ${product.sourceOriginalPrice},
+          ${product.sourceCurrency},
           ${product.discountPercent},
           ${product.available}
         FROM upserted
@@ -448,10 +558,27 @@ export async function POST(request: Request) {
         (
           snapshot.id IS NOT NULL
           AND existing.id IS NOT NULL
-          AND existing.current_price IS DISTINCT FROM upserted.current_price
+          AND CASE
+            WHEN upserted.source_current_price IS NOT NULL
+            THEN existing.source_current_price IS NOT NULL
+              AND existing.source_current_price
+                IS DISTINCT FROM upserted.source_current_price
+            ELSE existing.current_price IS NOT NULL
+              AND upserted.current_price IS NOT NULL
+              AND existing.current_price IS DISTINCT FROM upserted.current_price
+          END
         ) AS "priceChanged",
         CASE
-          WHEN existing.current_price > 0
+          WHEN existing.source_current_price > 0
+            AND upserted.source_current_price IS NOT NULL
+            AND upserted.source_current_price < existing.source_current_price
+          THEN (
+            (existing.source_current_price - upserted.source_current_price)
+            / existing.source_current_price
+            * 100
+          )::TEXT
+          WHEN upserted.source_current_price IS NULL
+            AND existing.current_price > 0
             AND upserted.current_price IS NOT NULL
             AND upserted.current_price < existing.current_price
           THEN (
