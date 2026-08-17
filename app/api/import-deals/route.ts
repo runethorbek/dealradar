@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
 import {
   formatImportSlackMessage,
+  parsePartialScanWarning,
   selectTopRecommendation,
   type ImportRecommendation,
 } from "@/lib/import-notification.mts";
@@ -473,6 +474,10 @@ export async function POST(request: Request) {
     const sourcePayloads = await Promise.all(
       sources.map((source) => fetchSourcePayload(source, ref)),
     );
+    const partialScanWarnings = sourcePayloads.flatMap((payload, index) => {
+      const warning = parsePartialScanWarning(sources[index].name, payload);
+      return warning ? [warning] : [];
+    });
     const scarossoNeedsUsdRate = sourceContainsCurrency(
       sourcePayloads[0],
       "USD",
@@ -669,6 +674,7 @@ export async function POST(request: Request) {
       },
       selectTopRecommendation(evaluatedProducts),
       new URL(request.url).origin,
+      partialScanWarnings,
     );
 
     try {

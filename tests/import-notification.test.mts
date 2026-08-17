@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatImportSlackMessage,
+  parsePartialScanWarning,
   selectTopRecommendation,
   type ImportRecommendation,
 } from "../lib/import-notification.mts";
@@ -136,4 +137,121 @@ test("formats preserved source pricing when normalized pricing is unavailable", 
     ),
     /275\.00 USD/,
   );
+});
+
+test("does not warn when scan_status is absent", () => {
+  assert.equal(parsePartialScanWarning("Scarosso", { products: [] }), null);
+});
+
+test("does not warn for a successful scan_status", () => {
+  assert.equal(
+    parsePartialScanWarning("Scarosso", {
+      scan_status: {
+        attempted_pages: 6,
+        successful_pages: 6,
+        failed_pages: 0,
+        failures: [],
+      },
+    }),
+    null,
+  );
+});
+
+test("renders one partial source with escaped failure details", () => {
+  const warning = parsePartialScanWarning("Scarosso", {
+    scan_status: {
+      attempted_pages: 6,
+      successful_pages: 5,
+      failed_pages: 1,
+      failures: [
+        {
+          name: "Boots <sale>",
+          url: "https://shop.example/search?q=boots&size=42",
+          error: "HTTP <503> & timeout",
+        },
+      ],
+    },
+  });
+
+  assert.ok(warning);
+  assert.match(
+    formatImportSlackMessage(
+      summary,
+      null,
+      "https://dealradar.example",
+      [warning],
+    ),
+    /Scan warnings:\n• Scarosso: 5\/6 pages succeeded; 1 failed\n  ◦ Boots &lt;sale&gt; — https:\/\/shop\.example\/search\?q=boots&amp;size=42: HTTP &lt;503&gt; &amp; timeout/,
+  );
+});
+
+test("renders warnings for multiple partial sources", () => {
+  const warnings = [
+    parsePartialScanWarning("Zalando", {
+      scan_status: {
+        attempted_pages: 10,
+        successful_pages: 8,
+        failed_pages: 2,
+        failures: [
+          { name: "Page 4", error: "timeout" },
+          { url: "https://shop.example/page/9", error: "HTTP 500" },
+        ],
+      },
+    }),
+    parsePartialScanWarning("Vinted", {
+      scan_status: {
+        attempted_pages: 3,
+        successful_pages: 2,
+        failed_pages: 1,
+        failures: [{ name: "Menswear", error_summary: "rate limited" }],
+      },
+    }),
+  ].filter((warning) => warning !== null);
+
+  const message = formatImportSlackMessage(
+    summary,
+    null,
+    "https://dealradar.example",
+    warnings,
+  );
+
+  assert.match(message, /• Zalando: 8\/10 pages succeeded; 2 failed/);
+  assert.match(message, /• Vinted: 2\/3 pages succeeded; 1 failed/);
+});
+
+test("ignores malformed scan_status metadata", () => {
+  const malformedStatuses = [
+    "partial",
+    {
+      attempted_pages: "6",
+      successful_pages: 5,
+      failed_pages: 1,
+      failures: [],
+    },
+    {
+      attempted_pages: 6,
+      successful_pages: 5,
+      failed_pages: 1,
+      failures: [],
+    },
+    {
+      attempted_pages: 6,
+      successful_pages: 5,
+      failed_pages: 2,
+      failures: [],
+    },
+    {
+      attempted_pages: 6,
+      successful_pages: 5,
+      failed_pages: 1,
+      failures: [{ name: "Page 6", error: 503 }],
+    },
+  ];
+
+  for (const scanStatus of malformedStatuses) {
+    assert.equal(
+      parsePartialScanWarning("Scarosso", { scan_status: scanStatus }),
+      null,
+    );
+  }
 });
