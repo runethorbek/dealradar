@@ -87,6 +87,17 @@ Do not commit, push, or deploy unless explicitly requested.
 - Run relevant checks after implementation.
 - Do not commit, push, or deploy unless explicitly requested.
 
+### Domain language
+
+- Read `docs/ubiquitous-language.md` before changing feedback semantics,
+  evaluation prompts, scoring, ranking, recommendation logic, or user-facing
+  terminology.
+- Use the terms defined there consistently across code, UI, tests, Slack,
+  prompts, and documentation.
+- If a change alters the meaning of a defined domain term, update the
+  ubiquitous-language document explicitly and call out the semantic change
+  for human review.
+
 ## Review workflow
 
 When asked to review:
