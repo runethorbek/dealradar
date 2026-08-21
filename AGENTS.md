@@ -124,6 +124,8 @@ Review for:
 - external API failure modes;
 - Gemini/AI prompt and output validation;
 - whether responsibilities belong in DealRadar or the scraper repository.
+- For changes affecting feedback, scoring, ranking, evaluations, or
+  recommendations, verify consistency with `docs/ubiquitous-language.md`.
 
 ## Human approval required
 
