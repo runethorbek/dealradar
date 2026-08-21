@@ -47,6 +47,23 @@ When asked to implement or fix something:
 
 Do not commit, push, or deploy unless explicitly requested.
 
+## Repository documentation
+
+Read the documentation relevant to the change before editing:
+
+- `docs/architecture.md` for repository boundaries, system responsibilities,
+  data flow, and cross-system changes.
+- `docs/import-contract.md` for scraper feeds, import behavior, source fields,
+  pricing/currency semantics, timestamps, images, and scan metadata.
+- `docs/ubiquitous-language.md` for feedback, scoring, ranking,
+  recommendation, and user-facing domain semantics.
+
+Do not read every document mechanically for unrelated changes.
+
+When a change alters a documented contract, architectural responsibility, or
+domain meaning, update the relevant documentation in the same change and call
+out the semantic change during review.
+
 ## Engineering rules
 
 ### Database
@@ -108,6 +125,7 @@ When asked to review:
 - Inspect the task, diff, relevant migrations, API contracts, tests, and documentation.
 - Report findings by severity with file and line references.
 - If there are no meaningful actionable findings, say so explicitly.
+- Verify relevant changes remain consistent with the architecture, import contract, and ubiquitous language.
 
 Review for:
 
