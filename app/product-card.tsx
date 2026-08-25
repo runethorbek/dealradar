@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export type Rating = "like" | "dislike";
@@ -24,6 +25,7 @@ export type ProductCardProduct = {
   currency: string | null;
   discountPercent: string | null;
   lastSeenAt: string;
+  hidden: boolean;
   feedback: Rating | null;
   evaluation: ProductEvaluation | null;
 };
@@ -98,6 +100,9 @@ function getOverallScore(evaluation: ProductEvaluation) {
 }
 
 export function ProductCard({ product }: { product: ProductCardProduct }) {
+  const router = useRouter();
+  const visibilityAction = product.hidden ? "Unhide" : "Hide";
+  const visibilityPendingLabel = product.hidden ? "Unhiding..." : "Hiding...";
   const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
   const [saving, setSaving] = useState<Rating | null>(null);
   const [failed, setFailed] = useState(false);
@@ -106,6 +111,8 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
   );
   const [evaluating, setEvaluating] = useState(false);
   const [evaluationFailed, setEvaluationFailed] = useState(false);
+  const [savingVisibility, setSavingVisibility] = useState(false);
+  const [visibilityFailed, setVisibilityFailed] = useState(false);
 
   async function evaluateProduct() {
     setEvaluating(true);
@@ -158,6 +165,39 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
     }
   }
 
+  async function saveVisibility() {
+    const hidden = !product.hidden;
+
+    setSavingVisibility(true);
+    setVisibilityFailed(false);
+
+    try {
+      const response = await fetch("/api/product-visibility", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, hidden }),
+      });
+      const result = (await response.json()) as {
+        productId?: unknown;
+        hidden?: unknown;
+      };
+
+      if (
+        !response.ok ||
+        result.productId !== product.id ||
+        result.hidden !== hidden
+      ) {
+        throw new Error("Visibility request failed.");
+      }
+
+      router.refresh();
+    } catch {
+      setVisibilityFailed(true);
+    } finally {
+      setSavingVisibility(false);
+    }
+  }
+
   return (
     <article
       id={`product-${product.id}`}
@@ -189,14 +229,21 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
             <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
               {product.source}
             </p>
-            {product.discountPercent !== null ? (
-              <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
-                -{Number(product.discountPercent).toLocaleString("en", {
-                  maximumFractionDigits: 1,
-                })}
-                %
-              </span>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-2">
+              {product.hidden ? (
+                <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
+                  Hidden
+                </span>
+              ) : null}
+              {product.discountPercent !== null ? (
+                <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">
+                  -{Number(product.discountPercent).toLocaleString("en", {
+                    maximumFractionDigits: 1,
+                  })}
+                  %
+                </span>
+              ) : null}
+            </div>
           </div>
 
           <h3 className="mt-2 line-clamp-2 min-h-12 text-base font-semibold leading-6 tracking-tight group-hover:text-zinc-600">
@@ -290,6 +337,23 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
       {failed ? (
         <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
           Could not save feedback.
+        </p>
+      ) : null}
+
+      <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
+        <span className="mr-auto text-xs text-zinc-400">Visibility</span>
+        <button
+          type="button"
+          disabled={savingVisibility}
+          onClick={saveVisibility}
+          className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm transition hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-60"
+        >
+          {savingVisibility ? visibilityPendingLabel : visibilityAction}
+        </button>
+      </div>
+      {visibilityFailed ? (
+        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
+          Could not update visibility. Try again.
         </p>
       ) : null}
     </article>

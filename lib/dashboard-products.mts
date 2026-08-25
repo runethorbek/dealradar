@@ -1,5 +1,11 @@
 const POSTGRES_BIGINT_MAX = BigInt("9223372036854775807");
 
+export type Visibility = "visible" | "hidden";
+
+export function parseVisibility(value: unknown): Visibility {
+  return value === "hidden" ? "hidden" : "visible";
+}
+
 export function parseProductId(value: unknown): string | null {
   if (
     typeof value !== "string" ||

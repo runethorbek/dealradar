@@ -5,6 +5,7 @@ export type ImportRecommendation = {
   currency: string | null;
   sourceCurrentPrice: string | null;
   sourceCurrency: string | null;
+  hidden: boolean;
   preferenceScore: number;
   dealScore: number;
 };
@@ -201,7 +202,10 @@ function selectHighestRanked(recommendations: ImportRecommendation[]) {
 export function selectTopRecommendation(
   recommendations: ImportRecommendation[],
 ) {
-  const normalizedPriceRecommendations = recommendations.filter(
+  const visibleRecommendations = recommendations.filter(
+    (item) => !item.hidden,
+  );
+  const normalizedPriceRecommendations = visibleRecommendations.filter(
     (item) => item.currentPrice !== null && item.currency !== null,
   );
 
@@ -210,7 +214,7 @@ export function selectTopRecommendation(
   }
 
   return selectHighestRanked(
-    recommendations.filter(
+    visibleRecommendations.filter(
       (item) =>
         item.sourceCurrentPrice !== null && item.sourceCurrency !== null,
     ),

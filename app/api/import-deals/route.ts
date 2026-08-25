@@ -1,10 +1,14 @@
 import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
 import {
+  evaluateCandidates,
+  selectEvaluationCandidates,
+  type ImportEvaluationResult,
+} from "@/lib/import-evaluation.mts";
+import {
   formatImportSlackMessage,
   parsePartialScanWarning,
   selectTopRecommendation,
-  type ImportRecommendation,
 } from "@/lib/import-notification.mts";
 import {
   normalizeScarossoPrices,
@@ -36,40 +40,15 @@ type NormalizedProduct = {
   rawData: JsonObject;
 };
 
-type ImportResult = {
-  productId: string;
-  title: string;
-  currentPrice: string | null;
-  currency: string | null;
-  sourceCurrentPrice: string | null;
-  sourceCurrency: string | null;
-  inserted: boolean;
+type ImportResult = ImportEvaluationResult & {
   snapshotId: string | null;
-  priceChanged: boolean;
-  priceDropPercent: string | null;
-  discountPercent: string | null;
 };
-
-type EvaluationCandidate = Pick<
-  ImportResult,
-  | "productId"
-  | "title"
-  | "currentPrice"
-  | "currency"
-  | "sourceCurrentPrice"
-  | "sourceCurrency"
-  | "inserted"
-  | "priceDropPercent"
-  | "discountPercent"
->;
 
 class SourceDataError extends Error {}
 
 const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
 const usdToDkkRateUrl =
   "https://api.frankfurter.dev/v2/rate/USD/DKK?providers=DNB";
-const automaticEvaluationLimit = 50;
-const evaluationConcurrency = 5;
 
 const sources = [
   {
@@ -298,139 +277,6 @@ async function fetchUsdToDkkRate() {
   }
 }
 
-function compareNullableNumbersDescending(
-  leftValue: string | null,
-  rightValue: string | null,
-) {
-  const left = leftValue === null ? null : Number(leftValue);
-  const right = rightValue === null ? null : Number(rightValue);
-
-  if (left === null && right === null) {
-    return 0;
-  }
-
-  if (left === null || !Number.isFinite(left)) {
-    return 1;
-  }
-
-  if (right === null || !Number.isFinite(right)) {
-    return -1;
-  }
-
-  return right - left;
-}
-
-function maxNullableNumber(
-  leftValue: string | null,
-  rightValue: string | null,
-) {
-  const left = leftValue === null ? null : Number(leftValue);
-  const right = rightValue === null ? null : Number(rightValue);
-
-  if (left === null || !Number.isFinite(left)) {
-    return rightValue;
-  }
-
-  if (right === null || !Number.isFinite(right)) {
-    return leftValue;
-  }
-
-  return right > left ? rightValue : leftValue;
-}
-
-function selectEvaluationCandidates(results: ImportResult[]) {
-  const candidatesByProduct = new Map<string, EvaluationCandidate>();
-
-  for (const result of results) {
-    if (!result.inserted && !result.priceChanged) {
-      continue;
-    }
-
-    const existing = candidatesByProduct.get(result.productId);
-
-    candidatesByProduct.set(result.productId, {
-      productId: result.productId,
-      title: result.title,
-      currentPrice: result.currentPrice,
-      currency: result.currency,
-      sourceCurrentPrice: result.sourceCurrentPrice,
-      sourceCurrency: result.sourceCurrency,
-      inserted: result.inserted || existing?.inserted === true,
-      priceDropPercent: maxNullableNumber(
-        existing?.priceDropPercent ?? null,
-        result.priceDropPercent,
-      ),
-      discountPercent: maxNullableNumber(
-        existing?.discountPercent ?? null,
-        result.discountPercent,
-      ),
-    });
-  }
-
-  return [...candidatesByProduct.values()]
-    .sort((left, right) => {
-      if (left.inserted !== right.inserted) {
-        return left.inserted ? -1 : 1;
-      }
-
-      return (
-        compareNullableNumbersDescending(
-          left.priceDropPercent,
-          right.priceDropPercent,
-        ) ||
-        compareNullableNumbersDescending(
-          left.discountPercent,
-          right.discountPercent,
-        )
-      );
-    })
-    .slice(0, automaticEvaluationLimit);
-}
-
-async function evaluateCandidates(
-  candidates: EvaluationCandidate[],
-  databaseUrl: string,
-  apiKey: string | undefined,
-) {
-  if (!apiKey) {
-    return [];
-  }
-
-  const evaluated: ImportRecommendation[] = [];
-
-  for (let index = 0; index < candidates.length; index += evaluationConcurrency) {
-    const batch = candidates.slice(index, index + evaluationConcurrency);
-    const results = await Promise.allSettled(
-      batch.map(async (candidate) => {
-        const evaluation = await evaluateProduct({
-          productId: candidate.productId,
-          databaseUrl,
-          apiKey,
-        });
-
-        return {
-          productId: candidate.productId,
-          title: candidate.title,
-          currentPrice: candidate.currentPrice,
-          currency: candidate.currency,
-          sourceCurrentPrice: candidate.sourceCurrentPrice,
-          sourceCurrency: candidate.sourceCurrency,
-          preferenceScore: evaluation.preferenceScore,
-          dealScore: evaluation.dealScore,
-        };
-      }),
-    );
-
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        evaluated.push(result.value);
-      }
-    }
-  }
-
-  return evaluated;
-}
-
 export async function POST(request: Request) {
   const ingestApiKey = process.env.INGEST_API_KEY;
   const authorization = request.headers.get("authorization");
@@ -568,6 +414,7 @@ export async function POST(request: Request) {
           currency,
           source_current_price,
           source_currency,
+          hidden,
           discount_percent
       ),
       snapshot AS (
@@ -604,6 +451,7 @@ export async function POST(request: Request) {
         upserted.currency,
         upserted.source_current_price::TEXT AS "sourceCurrentPrice",
         upserted.source_currency AS "sourceCurrency",
+        upserted.hidden,
         (existing.id IS NULL) AS inserted,
         snapshot.id::TEXT AS "snapshotId",
         (
@@ -653,10 +501,17 @@ export async function POST(request: Request) {
       (result) => result.inserted,
     ).length;
     const evaluationCandidates = selectEvaluationCandidates(importResults);
+    const apiKey = process.env.GEMINI_API_KEY;
     const evaluatedProducts = await evaluateCandidates(
       evaluationCandidates,
-      databaseUrl,
-      process.env.GEMINI_API_KEY,
+      apiKey
+        ? (candidate) =>
+            evaluateProduct({
+              productId: candidate.productId,
+              databaseUrl,
+              apiKey,
+            })
+        : null,
     );
     const productsEvaluated = evaluatedProducts.length;
     const productsUpdated = products.length - productsInserted;

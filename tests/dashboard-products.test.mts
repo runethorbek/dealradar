@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   includeRequestedProduct,
+  parseVisibility,
   parseProductId,
 } from "../lib/dashboard-products.mts";
+
+test("parseVisibility defaults to Visible and accepts Hidden", () => {
+  assert.equal(parseVisibility(undefined), "visible");
+  assert.equal(parseVisibility("visible"), "visible");
+  assert.equal(parseVisibility("hidden"), "hidden");
+  assert.equal(parseVisibility("unexpected"), "visible");
+});
 
 test("parseProductId accepts positive PostgreSQL BIGINT product IDs", () => {
   assert.equal(parseProductId("1"), "1");
@@ -29,11 +37,11 @@ test("parseProductId ignores invalid and out-of-range product IDs", () => {
   }
 });
 
-test("a requested product outside the top 50 is displayed exactly once", () => {
+test("a requested hidden product outside the top 50 is displayed exactly once", () => {
   const topFifty = Array.from({ length: 50 }, (_, index) => ({
     id: String(index + 1),
   }));
-  const requestedProduct = { id: "51" };
+  const requestedProduct = { id: "51", hidden: true };
 
   const displayedProducts = includeRequestedProduct(
     topFifty,

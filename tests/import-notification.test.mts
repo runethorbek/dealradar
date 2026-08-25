@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  evaluateCandidates,
+  selectEvaluationCandidates,
+  type ImportEvaluationResult,
+} from "../lib/import-evaluation.mts";
+import {
   formatImportSlackMessage,
   parsePartialScanWarning,
   selectTopRecommendation,
@@ -24,6 +29,7 @@ const recommendations: ImportRecommendation[] = [
     currency: "DKK",
     sourceCurrentPrice: null,
     sourceCurrency: null,
+    hidden: false,
     preferenceScore: 8,
     dealScore: 7,
   },
@@ -34,6 +40,7 @@ const recommendations: ImportRecommendation[] = [
     currency: "DKK",
     sourceCurrentPrice: null,
     sourceCurrency: null,
+    hidden: false,
     preferenceScore: 9,
     dealScore: 8,
   },
@@ -41,6 +48,90 @@ const recommendations: ImportRecommendation[] = [
 
 test("selects the recommendation with the highest rounded overall score", () => {
   assert.equal(selectTopRecommendation(recommendations)?.productId, "2");
+});
+
+test("evaluates hidden and visible products before selecting a visible recommendation", async () => {
+  const importedResults: ImportEvaluationResult[] = [
+    {
+      productId: "hidden",
+      title: "Hidden deal",
+      currentPrice: "1200.00",
+      currency: "DKK",
+      sourceCurrentPrice: null,
+      sourceCurrency: null,
+      hidden: true,
+      inserted: true,
+      priceChanged: false,
+      priceDropPercent: null,
+      discountPercent: null,
+    },
+    {
+      productId: "visible",
+      title: "Visible deal",
+      currentPrice: "900.00",
+      currency: "DKK",
+      sourceCurrentPrice: null,
+      sourceCurrency: null,
+      hidden: false,
+      inserted: true,
+      priceChanged: false,
+      priceDropPercent: null,
+      discountPercent: null,
+    },
+  ];
+  const evaluatedProductIds: string[] = [];
+
+  const evaluatedProducts = await evaluateCandidates(
+    selectEvaluationCandidates(importedResults),
+    async (candidate) => {
+      evaluatedProductIds.push(candidate.productId);
+
+      return {
+        preferenceScore: candidate.hidden ? 10 : 8,
+        dealScore: candidate.hidden ? 10 : 7,
+      };
+    },
+  );
+
+  assert.deepEqual(evaluatedProductIds.sort(), ["hidden", "visible"]);
+  assert.deepEqual(
+    evaluatedProducts.map(({ productId, hidden }) => ({ productId, hidden })),
+    [
+      { productId: "hidden", hidden: true },
+      { productId: "visible", hidden: false },
+    ],
+  );
+  assert.equal(selectTopRecommendation(evaluatedProducts)?.productId, "visible");
+});
+
+test("returns no recommendation when every evaluated product is hidden", async () => {
+  const importedResults: ImportEvaluationResult[] = [
+    {
+      productId: "hidden-source-price",
+      title: "Hidden source-priced deal",
+      currentPrice: null,
+      currency: null,
+      sourceCurrentPrice: "100.00",
+      sourceCurrency: "USD",
+      hidden: true,
+      inserted: true,
+      priceChanged: false,
+      priceDropPercent: null,
+      discountPercent: null,
+    },
+  ];
+  let evaluationCount = 0;
+
+  const evaluatedProducts = await evaluateCandidates(
+    selectEvaluationCandidates(importedResults),
+    async () => {
+      evaluationCount += 1;
+      return { preferenceScore: 10, dealScore: 10 };
+    },
+  );
+
+  assert.equal(evaluationCount, 1);
+  assert.equal(selectTopRecommendation(evaluatedProducts), null);
 });
 
 test("prefers complete normalized pricing over a higher-ranked source-price fallback", () => {
@@ -51,6 +142,7 @@ test("prefers complete normalized pricing over a higher-ranked source-price fall
     currency: null,
     sourceCurrentPrice: "100.00",
     sourceCurrency: "USD",
+    hidden: false,
     preferenceScore: 10,
     dealScore: 10,
   };
@@ -69,6 +161,7 @@ test("falls back to complete preserved source pricing", () => {
     currency: null,
     sourceCurrentPrice: "100.00",
     sourceCurrency: "USD",
+    hidden: false,
     preferenceScore: 8,
     dealScore: 7,
   };
@@ -84,6 +177,7 @@ test("does not select a recommendation without a complete price and currency", (
     currency: null,
     sourceCurrentPrice: null,
     sourceCurrency: null,
+    hidden: false,
     preferenceScore: 10,
     dealScore: 10,
   };
@@ -125,6 +219,7 @@ test("formats preserved source pricing when normalized pricing is unavailable", 
     currency: null,
     sourceCurrentPrice: "275.00",
     sourceCurrency: "USD",
+    hidden: false,
     preferenceScore: 8,
     dealScore: 6,
   };

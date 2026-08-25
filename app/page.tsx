@@ -3,7 +3,9 @@ import Link from "next/link";
 import { connection } from "next/server";
 import {
   includeRequestedProduct,
+  parseVisibility,
   parseProductId,
+  type Visibility,
 } from "@/lib/dashboard-products.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 
@@ -23,7 +25,16 @@ const sortOptions: { label: string; value: Sort }[] = [
   { label: "Newest", value: "newest" },
 ];
 
-function getDashboardHref(source: Source | null, sort: Sort) {
+const visibilityOptions: { label: string; value: Visibility }[] = [
+  { label: "Visible", value: "visible" },
+  { label: "Hidden", value: "hidden" },
+];
+
+function getDashboardHref(
+  source: Source | null,
+  sort: Sort,
+  visibility: Visibility,
+) {
   const params = new URLSearchParams();
 
   if (source) {
@@ -34,6 +45,10 @@ function getDashboardHref(source: Source | null, sort: Sort) {
     params.set("sort", sort);
   }
 
+  if (visibility !== "visible") {
+    params.set("view", visibility);
+  }
+
   const query = params.toString();
   return query ? `/?${query}` : "/";
 }
@@ -41,6 +56,7 @@ function getDashboardHref(source: Source | null, sort: Sort) {
 async function getLatestProducts(
   source: Source | null,
   sort: Sort,
+  visibility: Visibility,
   highlightedProductId: string | null,
 ) {
   await connection();
@@ -66,6 +82,7 @@ async function getLatestProducts(
             p.currency,
             p.discount_percent::TEXT AS "discountPercent",
             p.last_seen_at::TEXT AS "lastSeenAt",
+            p.hidden,
             pf.rating AS feedback,
             CASE
               WHEN pe.product_id IS NULL THEN NULL
@@ -80,6 +97,7 @@ async function getLatestProducts(
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
           LEFT JOIN product_evaluations pe ON pe.product_id = p.id
           WHERE p.source = ${source}
+            AND p.hidden = ${visibility === "hidden"}
           ORDER BY
             (pe.product_id IS NULL) ASC,
             CASE
@@ -103,6 +121,7 @@ async function getLatestProducts(
             p.currency,
             p.discount_percent::TEXT AS "discountPercent",
             p.last_seen_at::TEXT AS "lastSeenAt",
+            p.hidden,
             pf.rating AS feedback,
             CASE
               WHEN pe.product_id IS NULL THEN NULL
@@ -116,6 +135,7 @@ async function getLatestProducts(
           FROM products p
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
           LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+          WHERE p.hidden = ${visibility === "hidden"}
           ORDER BY
             (pe.product_id IS NULL) ASC,
             CASE
@@ -149,6 +169,7 @@ async function getLatestProducts(
         p.currency,
         p.discount_percent::TEXT AS "discountPercent",
         p.last_seen_at::TEXT AS "lastSeenAt",
+        p.hidden,
         pf.rating AS feedback,
         CASE
           WHEN pe.product_id IS NULL THEN NULL
@@ -181,6 +202,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const query = await searchParams;
   const requestedSource = query.source;
   const requestedSort = query.sort;
+  const selectedVisibility = parseVisibility(query.view);
   const highlightedProductId = parseProductId(query.product);
   const selectedSource = sourceFilters.some(
     (filter) => filter.value === requestedSource,
@@ -195,6 +217,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const { products, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
+    selectedVisibility,
     highlightedProductId,
   );
 
@@ -232,6 +255,37 @@ export default async function Home({ searchParams }: PageProps<"/">) {
 
         <div className="mb-6 space-y-3">
           <nav
+            aria-label="Filter deals by visibility"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
+              View
+            </span>
+            {visibilityOptions.map((option) => {
+              const isActive = option.value === selectedVisibility;
+
+              return (
+                <Link
+                  key={option.value}
+                  href={getDashboardHref(
+                    selectedSource,
+                    selectedSort,
+                    option.value,
+                  )}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                    isActive
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                  }`}
+                >
+                  {option.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <nav
             aria-label="Filter deals by source"
             className="flex flex-wrap items-center gap-2"
           >
@@ -244,7 +298,11 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               return (
                 <Link
                   key={filter.label}
-                  href={getDashboardHref(filter.value, selectedSort)}
+                  href={getDashboardHref(
+                    filter.value,
+                    selectedSort,
+                    selectedVisibility,
+                  )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
                     isActive
@@ -271,7 +329,11 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               return (
                 <Link
                   key={option.value}
-                  href={getDashboardHref(selectedSource, option.value)}
+                  href={getDashboardHref(
+                    selectedSource,
+                    option.value,
+                    selectedVisibility,
+                  )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
                     isActive
@@ -295,7 +357,9 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         ) : products.length === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-200 bg-white px-6 py-12 text-center">
             <p className="text-sm text-zinc-500">
-              No products have been imported yet.
+              {selectedVisibility === "hidden"
+                ? "No hidden products match the current filters."
+                : "No visible products match the current filters."}
             </p>
           </div>
         ) : (

@@ -30,6 +30,40 @@ It does not necessarily mean:
 - the price is bad;
 - the retailer or product data is incorrect.
 
+## Visibility
+
+The presentation state that determines whether a tracked product appears in
+the user's default product view.
+
+Visibility is separate from preference feedback. A product may be hidden while
+being liked or marked "Not for me."
+
+## Hide
+
+A reversible visibility action meaning:
+
+> "Keep tracking this product, but do not show it in my default product view
+> or product recommendations until I choose Unhide."
+
+Hide is not preference feedback. It must not teach DealRadar that the product
+is liked or not relevant. Hiding does not change existing import, evaluation
+eligibility, scoring, sorting, or price-tracking behavior.
+
+Hidden products remain available through the Hidden view. An explicitly
+requested hidden product remains available and is clearly identified as
+Hidden. Hidden products are excluded from product recommendation selection,
+but hiding does not affect operational import summaries or scan warnings.
+
+## Unhide
+
+A visibility action that returns a hidden product to the default product view
+and product recommendation eligibility.
+
+Unhide is always explicit and does not change existing Like or Not for me
+feedback. Like and Not for me never change product visibility. Unhide restores
+eligibility for future product recommendations but does not itself trigger a
+notification.
+
 ## Preference score
 
 A score from 1-10 representing how well the product matches the user's
