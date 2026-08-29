@@ -1,6 +1,8 @@
 import { neon } from "@neondatabase/serverless";
 import Link from "next/link";
+import { getServerSession } from "next-auth";
 import { connection } from "next/server";
+import { authOptions } from "@/auth";
 import { PreferencesForm } from "./preferences-form";
 
 async function getPreferences() {
@@ -31,7 +33,10 @@ async function getPreferences() {
 }
 
 export default async function PreferencesPage() {
-  const { profileText, failed } = await getPreferences();
+  const [{ profileText, failed }, session] = await Promise.all([
+    getPreferences(),
+    getServerSession(authOptions),
+  ]);
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950">
@@ -48,6 +53,16 @@ export default async function PreferencesPage() {
             className="ml-auto text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
           >
             Dashboard
+          </Link>
+          <Link
+            href={
+              session
+                ? "/api/auth/signout?callbackUrl=/preferences"
+                : "/api/auth/signin?callbackUrl=/preferences"
+            }
+            className="ml-4 text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
+          >
+            {session ? "Sign out" : "Sign in"}
           </Link>
         </div>
       </header>

@@ -329,6 +329,40 @@ Connection string for the Neon PostgreSQL database.
 ---
 
 ```text
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
+NEXTAUTH_SECRET
+NEXTAUTH_URL
+OWNER_EMAIL
+```
+
+Location:
+
+```text
+Vercel
+â†’ DealRadar project
+â†’ Settings
+â†’ Environment Variables
+```
+
+Purpose:
+
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` identify DealRadar's Google OAuth web client.
+- `NEXTAUTH_SECRET` signs encrypted session cookies. Generate it with a cryptographically secure random generator.
+- `NEXTAUTH_URL` is the canonical deployed DealRadar URL, currently `https://dealradar-rouge.vercel.app`.
+- `OWNER_EMAIL` is the allowed owner's lowercase, verified Google email address.
+
+Google OAuth's authorized redirect URI must include:
+
+```text
+https://dealradar-rouge.vercel.app/api/auth/callback/google
+```
+
+For local development, also configure the corresponding localhost callback URI.
+
+---
+
+```text
 INGEST_API_KEY
 ```
 
