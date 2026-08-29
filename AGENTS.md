@@ -125,7 +125,7 @@ When asked to review:
 - Inspect the task, diff, relevant migrations, API contracts, tests, and documentation.
 - Report findings by severity with file and line references.
 - If there are no meaningful actionable findings, say so explicitly.
-- Verify relevant changes remain consistent with the architecture, import contract, and ubiquitous language.
+- Verify relevant changes remain consistent with the architecture, import contract, and ubiquitous language.sl
 
 Review for:
 
