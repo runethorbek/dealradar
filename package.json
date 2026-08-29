@@ -2,12 +2,15 @@
   "name": "dealradar",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts"
+    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts tests/product-feedback-authentication.test.mts && node --experimental-test-module-mocks --test tests/product-feedback-route-authentication.test.mts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",
