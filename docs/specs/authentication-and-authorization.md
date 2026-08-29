@@ -138,3 +138,5 @@ For the first version:
 ## Implementation
 
 - [#4](https://github.com/runethorbek/dealradar/issues/4)
+- [#5](https://github.com/runethorbek/dealradar/issues/5)
+- [#6](https://github.com/runethorbek/dealradar/issues/6)
