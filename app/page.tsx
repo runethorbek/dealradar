@@ -1,6 +1,8 @@
 import { neon } from "@neondatabase/serverless";
 import Link from "next/link";
 import { connection } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import {
   includeRequestedProduct,
   parseVisibility,
@@ -8,6 +10,7 @@ import {
   type Visibility,
 } from "@/lib/dashboard-products.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
+import { AppNavigation } from "./navigation";
 
 type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
 type Sort = "best_match" | "best_deal" | "newest";
@@ -34,6 +37,7 @@ function getDashboardHref(
   source: Source | null,
   sort: Sort,
   visibility: Visibility,
+  highlightedProductId?: string | null,
 ) {
   const params = new URLSearchParams();
 
@@ -47,6 +51,10 @@ function getDashboardHref(
 
   if (visibility !== "visible") {
     params.set("view", visibility);
+  }
+
+  if (highlightedProductId) {
+    params.set("product", highlightedProductId);
   }
 
   const query = params.toString();
@@ -200,6 +208,7 @@ async function getLatestProducts(
 
 export default async function Home({ searchParams }: PageProps<"/">) {
   const query = await searchParams;
+  const session = await getServerSession(authOptions);
   const requestedSource = query.source;
   const requestedSort = query.sort;
   const selectedVisibility = parseVisibility(query.view);
@@ -223,20 +232,16 @@ export default async function Home({ searchParams }: PageProps<"/">) {
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-6xl items-center px-6 lg:px-8">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 text-sm font-semibold text-white">
-            D
-          </span>
-          <h1 className="ml-3 text-lg font-semibold tracking-tight">DealRadar</h1>
-          <Link
-            href="/preferences"
-            className="ml-auto text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
-          >
-            Preferences
-          </Link>
-        </div>
-      </header>
+      <AppNavigation
+        session={session}
+        currentPage="dashboard"
+        callbackPath={getDashboardHref(
+          selectedSource,
+          selectedSort,
+          selectedVisibility,
+          highlightedProductId,
+        )}
+      />
 
       <main className="mx-auto max-w-6xl px-6 py-10 lg:px-8 lg:py-14">
         <div className="mb-8 flex items-end justify-between gap-4">

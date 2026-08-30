@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { connection } from "next/server";
 import { authOptions } from "@/auth";
 import { PreferencesForm } from "./preferences-form";
+import { AppNavigation } from "../navigation";
 
 async function getPreferences() {
   await connection();
@@ -40,32 +41,11 @@ export default async function PreferencesPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-950">
-      <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-6xl items-center px-6 lg:px-8">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 text-sm font-semibold text-white">
-            D
-          </span>
-          <Link href="/" className="ml-3 text-lg font-semibold tracking-tight">
-            DealRadar
-          </Link>
-          <Link
-            href="/"
-            className="ml-auto text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href={
-              session
-                ? "/api/auth/signout?callbackUrl=/preferences"
-                : "/api/auth/signin?callbackUrl=/preferences"
-            }
-            className="ml-4 text-sm font-medium text-zinc-500 transition hover:text-zinc-950"
-          >
-            {session ? "Sign out" : "Sign in"}
-          </Link>
-        </div>
-      </header>
+      <AppNavigation
+        session={session}
+        currentPage="preferences"
+        callbackPath="/preferences"
+      />
 
       <main className="mx-auto max-w-3xl px-6 py-10 lg:px-8 lg:py-14">
         <div className="mb-8">
