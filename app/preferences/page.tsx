@@ -1,5 +1,4 @@
 import { neon } from "@neondatabase/serverless";
-import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { connection } from "next/server";
 import { authOptions } from "@/auth";
