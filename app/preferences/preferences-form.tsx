@@ -2,7 +2,15 @@
 
 import { FormEvent, useState } from "react";
 
-type SaveState = "idle" | "saving" | "saved" | "failed";
+type SaveState =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "failed"
+  | "signInRequired"
+  | "unauthorized";
+
+const preferencesCallbackPath = "/preferences";
 
 export function PreferencesForm({ profileText }: { profileText: string }) {
   const [value, setValue] = useState(profileText);
@@ -18,6 +26,16 @@ export function PreferencesForm({ profileText }: { profileText: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ profileText: value }),
       });
+
+      if (response.status === 401) {
+        setSaveState("signInRequired");
+        return;
+      }
+
+      if (response.status === 403) {
+        setSaveState("unauthorized");
+        return;
+      }
 
       if (!response.ok) {
         throw new Error("Preferences request failed.");
@@ -53,7 +71,11 @@ export function PreferencesForm({ profileText }: { profileText: string }) {
       <div className="mt-4 flex items-center gap-4">
         <button
           type="submit"
-          disabled={saveState === "saving"}
+          disabled={
+            saveState === "saving" ||
+            saveState === "signInRequired" ||
+            saveState === "unauthorized"
+          }
           className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-60"
         >
           {saveState === "saving" ? "Saving..." : "Save preferences"}
@@ -61,6 +83,20 @@ export function PreferencesForm({ profileText }: { profileText: string }) {
         <p className="text-sm text-zinc-500" role="status" aria-live="polite">
           {saveState === "saved" ? "Saved." : null}
           {saveState === "failed" ? "Could not save preferences." : null}
+          {saveState === "signInRequired" ? (
+            <>
+              <a
+                href={`/api/auth/signin?callbackUrl=${encodeURIComponent(preferencesCallbackPath)}`}
+                className="underline hover:text-zinc-950"
+              >
+                Sign in
+              </a>
+              {" "}to save preferences.
+            </>
+          ) : null}
+          {saveState === "unauthorized"
+            ? "You don't have permission to save preferences."
+            : null}
         </p>
       </div>
     </form>
