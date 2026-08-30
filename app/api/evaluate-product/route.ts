@@ -1,7 +1,10 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "../../../auth.ts";
+import { authorizeOwner } from "../../../lib/owner-authorization.mts";
 import {
   evaluateProduct,
   ProductNotFoundError,
-} from "@/lib/product-evaluation";
+} from "../../../lib/product-evaluation.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +21,24 @@ function getProductId(value: unknown) {
 }
 
 export async function POST(request: Request) {
+  const authorization = authorizeOwner(
+    (await getServerSession(authOptions))?.user,
+  );
+
+  if (authorization.status === "unauthenticated") {
+    return Response.json(
+      { success: false, error: "Unauthorized." },
+      { status: 401 },
+    );
+  }
+
+  if (authorization.status === "unauthorized") {
+    return Response.json(
+      { success: false, error: "Forbidden." },
+      { status: 403 },
+    );
+  }
+
   let body: unknown;
 
   try {
