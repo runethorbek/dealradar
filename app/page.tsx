@@ -370,7 +370,16 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         ) : (
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {products.map((product) => (
-              <ProductCard key={product.id} product={product} />
+              <ProductCard
+                key={product.id}
+                product={product}
+                authCallbackPath={getDashboardHref(
+                  selectedSource,
+                  selectedSort,
+                  selectedVisibility,
+                  product.id,
+                )}
+              />
             ))}
           </div>
         )}

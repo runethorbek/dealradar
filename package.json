@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts tests/product-feedback-authentication.test.mts && node --experimental-test-module-mocks --test tests/evaluate-product-route-authentication.test.mts tests/product-feedback-route-authentication.test.mts tests/product-visibility-route-authentication.test.mts"
+    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts tests/product-feedback-authentication.test.mts && node --experimental-test-module-mocks --test tests/evaluate-product-route-authentication.test.mts tests/product-feedback-route-authentication.test.mts tests/product-visibility-route-authentication.test.mts && node --import tsx --experimental-test-module-mocks --test tests/product-card-feedback-authentication-component.test.mts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",
@@ -22,12 +22,15 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

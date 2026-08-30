@@ -99,13 +99,21 @@ function getOverallScore(evaluation: ProductEvaluation) {
   );
 }
 
-export function ProductCard({ product }: { product: ProductCardProduct }) {
+export function ProductCard({
+  product,
+  authCallbackPath,
+}: {
+  product: ProductCardProduct;
+  authCallbackPath: string;
+}) {
   const router = useRouter();
   const visibilityAction = product.hidden ? "Unhide" : "Hide";
   const visibilityPendingLabel = product.hidden ? "Unhiding..." : "Hiding...";
   const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
   const [saving, setSaving] = useState<Rating | null>(null);
   const [failed, setFailed] = useState(false);
+  const [feedbackSignInRequired, setFeedbackSignInRequired] = useState(false);
+  const [feedbackUnauthorized, setFeedbackUnauthorized] = useState(false);
   const [evaluation, setEvaluation] = useState<ProductEvaluation | null>(
     product.evaluation,
   );
@@ -141,6 +149,8 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
   async function saveFeedback(rating: Rating) {
     setSaving(rating);
     setFailed(false);
+    setFeedbackSignInRequired(false);
+    setFeedbackUnauthorized(false);
 
     try {
       const response = await fetch("/api/product-feedback", {
@@ -149,6 +159,16 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
         body: JSON.stringify({ productId: product.id, rating }),
       });
       const result = (await response.json()) as { rating?: unknown };
+
+      if (response.status === 401) {
+        setFeedbackSignInRequired(true);
+        return;
+      }
+
+      if (response.status === 403) {
+        setFeedbackUnauthorized(true);
+        return;
+      }
 
       if (
         !response.ok ||
@@ -319,7 +339,7 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
               type="button"
               aria-label={label}
               aria-pressed={isActive}
-              disabled={saving !== null}
+              disabled={saving !== null || feedbackSignInRequired || feedbackUnauthorized}
               onClick={() => saveFeedback(rating)}
               className={`rounded-md border px-2.5 py-1.5 text-sm transition disabled:cursor-wait disabled:opacity-60 ${
                 isActive
@@ -337,6 +357,22 @@ export function ProductCard({ product }: { product: ProductCardProduct }) {
       {failed ? (
         <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
           Could not save feedback.
+        </p>
+      ) : null}
+      {feedbackSignInRequired ? (
+        <p className="px-5 pb-3 text-right text-xs text-zinc-600" role="status">
+          <a
+            href={`/api/auth/signin?callbackUrl=${encodeURIComponent(authCallbackPath)}`}
+            className="underline hover:text-zinc-950"
+          >
+            Sign in
+          </a>
+          {" "}to save feedback.
+        </p>
+      ) : null}
+      {feedbackUnauthorized ? (
+        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
+          You don&apos;t have permission to save feedback.
         </p>
       ) : null}
 
