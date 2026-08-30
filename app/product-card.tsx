@@ -119,6 +119,8 @@ export function ProductCard({
   );
   const [evaluating, setEvaluating] = useState(false);
   const [evaluationFailed, setEvaluationFailed] = useState(false);
+  const [evaluationSignInRequired, setEvaluationSignInRequired] = useState(false);
+  const [evaluationUnauthorized, setEvaluationUnauthorized] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [visibilityFailed, setVisibilityFailed] = useState(false);
   const [visibilitySignInRequired, setVisibilitySignInRequired] = useState(false);
@@ -127,6 +129,8 @@ export function ProductCard({
   async function evaluateProduct() {
     setEvaluating(true);
     setEvaluationFailed(false);
+    setEvaluationSignInRequired(false);
+    setEvaluationUnauthorized(false);
 
     try {
       const response = await fetch("/api/evaluate-product", {
@@ -135,6 +139,16 @@ export function ProductCard({
         body: JSON.stringify({ productId: product.id }),
       });
       const result = (await response.json()) as { evaluation?: unknown };
+
+      if (response.status === 401) {
+        setEvaluationSignInRequired(true);
+        return;
+      }
+
+      if (response.status === 403) {
+        setEvaluationUnauthorized(true);
+        return;
+      }
 
       if (!response.ok || !isProductEvaluation(result.evaluation)) {
         throw new Error("Evaluation request failed.");
@@ -323,7 +337,9 @@ export function ProductCard({
           <div>
             <button
               type="button"
-              disabled={evaluating}
+              disabled={
+                evaluating || evaluationSignInRequired || evaluationUnauthorized
+              }
               onClick={evaluateProduct}
               className="rounded-md bg-zinc-950 px-3 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-wait disabled:opacity-60"
             >
@@ -332,6 +348,22 @@ export function ProductCard({
             {evaluationFailed ? (
               <p className="mt-2 text-xs text-rose-600" role="status">
                 Could not evaluate this product.
+              </p>
+            ) : null}
+            {evaluationSignInRequired ? (
+              <p className="mt-2 text-xs text-zinc-600" role="status">
+                <a
+                  href={`/api/auth/signin?callbackUrl=${encodeURIComponent(authCallbackPath)}`}
+                  className="underline hover:text-zinc-950"
+                >
+                  Sign in
+                </a>
+                {" "}to evaluate this product.
+              </p>
+            ) : null}
+            {evaluationUnauthorized ? (
+              <p className="mt-2 text-xs text-rose-600" role="status">
+                You don&apos;t have permission to evaluate this product.
               </p>
             ) : null}
           </div>

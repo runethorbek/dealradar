@@ -107,6 +107,17 @@ async function clickVisibility(container: HTMLElement, label: "Hide" | "Unhide")
   });
 }
 
+async function clickEvaluate(container: HTMLElement) {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent === "Evaluate",
+  );
+  assert.ok(button, "Expected Evaluate control.");
+
+  await act(async () => {
+    button.click();
+  });
+}
+
 test("an unauthenticated Like attempt offers sign-in with the preserved dashboard callback", async () => {
   const container = await renderFeedbackCard(
     Response.json({ success: false, error: "Unauthorized." }, { status: 401 }),
@@ -247,4 +258,70 @@ test("authorized Hide and Unhide attempts retain their existing behavior", async
     refreshCalls = 0;
     document.body.replaceChildren();
   }
+});
+
+test("an unauthenticated Evaluate attempt offers sign-in with the preserved dashboard callback", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: false, error: "Unauthorized." }, { status: 401 }),
+  );
+
+  await clickEvaluate(container);
+
+  const signIn = container.querySelector<HTMLAnchorElement>(
+    'a[href^="/api/auth/signin?"]',
+  );
+  assert.ok(signIn);
+  assert.equal(signIn.textContent, "Sign in");
+  assert.equal(
+    signIn.getAttribute("href"),
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+  );
+  assert.match(container.textContent ?? "", /to evaluate this product\./);
+  assert.doesNotMatch(
+    container.textContent ?? "",
+    /Could not evaluate this product\.|permission to evaluate this product/,
+  );
+});
+
+test("a non-owner Evaluate attempt explains that evaluation is not permitted", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: false, error: "Forbidden." }, { status: 403 }),
+  );
+
+  await clickEvaluate(container);
+
+  assert.match(
+    container.textContent ?? "",
+    /You don't have permission to evaluate this product\./,
+  );
+  assert.equal(
+    container.querySelector('a[href^="/api/auth/signin?"]'),
+    null,
+  );
+  assert.doesNotMatch(container.textContent ?? "", /Could not evaluate this product\./);
+});
+
+test("an authorized Evaluate attempt renders the returned evaluation", async () => {
+  const container = await renderProductCard(
+    Response.json({
+      success: true,
+      evaluation: {
+        preferenceScore: 8,
+        dealScore: 7,
+        reason: "Strong preference match at a good price.",
+        evaluatedAt: "2026-08-30T12:00:00.000Z",
+      },
+    }),
+  );
+
+  await clickEvaluate(container);
+
+  assert.match(container.textContent ?? "", /Overall 8\/10/);
+  assert.match(container.textContent ?? "", /Preference 8\/10/);
+  assert.match(container.textContent ?? "", /Deal 7\/10/);
+  assert.match(container.textContent ?? "", /Strong preference match at a good price\./);
+  assert.doesNotMatch(
+    container.textContent ?? "",
+    /Could not evaluate this product\.|Sign in to evaluate this product\.|permission to evaluate this product/,
+  );
 });
