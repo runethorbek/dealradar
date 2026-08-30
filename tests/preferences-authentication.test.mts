@@ -17,6 +17,9 @@ test("owner authorization distinguishes missing, non-owner, and owner identities
   assert.deepEqual(authorizeOwner(null, ownerEmail), { status: "unauthenticated" });
   assert.deepEqual(authorizeOwner({ email: "other@example.com", emailVerified: true }, ownerEmail), { status: "unauthorized" });
   assert.deepEqual(authorizeOwner({ email: ownerEmail, emailVerified: false }, ownerEmail), { status: "unauthorized" });
+  assert.deepEqual(authorizeOwner({ email: "OWNER@example.com", emailVerified: true }, ownerEmail), { status: "unauthorized" });
+  assert.deepEqual(authorizeOwner({ email: ownerEmail, emailVerified: true }, " OWNER@example.com"), { status: "unauthorized" });
+  assert.deepEqual(authorizeOwner({ email: ownerEmail, emailVerified: true }, "OWNER@example.com"), { status: "unauthorized" });
   assert.deepEqual(authorizeOwner({ email: ownerEmail, emailVerified: true }, ownerEmail), { status: "authorized" });
 });
 

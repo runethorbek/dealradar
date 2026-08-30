@@ -1,9 +1,30 @@
+import { getServerSession } from "next-auth";
 import { neon } from "@neondatabase/serverless";
-import { parseProductVisibilityRequest } from "@/lib/product-visibility.mts";
+import { authOptions } from "../../../auth.ts";
+import { authorizeOwner } from "../../../lib/owner-authorization.mts";
+import { parseProductVisibilityRequest } from "../../../lib/product-visibility.mts";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const authorization = authorizeOwner(
+    (await getServerSession(authOptions))?.user,
+  );
+
+  if (authorization.status === "unauthenticated") {
+    return Response.json(
+      { success: false, error: "Unauthorized." },
+      { status: 401 },
+    );
+  }
+
+  if (authorization.status === "unauthorized") {
+    return Response.json(
+      { success: false, error: "Forbidden." },
+      { status: 403 },
+    );
+  }
+
   let body: unknown;
 
   try {

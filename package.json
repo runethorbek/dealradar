@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts tests/product-feedback-authentication.test.mts && node --experimental-test-module-mocks --test tests/product-feedback-route-authentication.test.mts"
+    "test": "node --test tests/price-normalization.test.mts tests/import-notification.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/preferences-authentication.test.mts tests/product-feedback-authentication.test.mts && node --experimental-test-module-mocks --test tests/product-feedback-route-authentication.test.mts tests/product-visibility-route-authentication.test.mts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",
