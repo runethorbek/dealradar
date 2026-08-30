@@ -157,3 +157,22 @@ Obtain explicit human approval before:
 - adding a new external service;
 - deleting or destructively rewriting stored data;
 - committing, pushing, or deploying.
+
+## GitHub issue access
+
+When asked to read a GitHub issue:
+
+- Use `gh` as the source of truth.
+- Do not attempt `gh` inside the sandbox.
+- Use the approved host execution path directly.
+- Read-only GitHub commands such as `gh issue view` and `gh issue list` may be used without asking first when permitted by Codex rules.
+- Do not perform GitHub write operations unless explicitly requested.
+
+When asked to create or modify a GitHub issue:
+
+- Use `gh` for the requested GitHub write operation.
+- Do not attempt `gh` inside the sandbox.
+- Request permission before executing the write operation unless the user has explicitly asked for that exact operation in the current request and the Codex permission system already allows it.
+- Before execution, state briefly what will change on GitHub.
+- Do not create, edit, close, comment on, relabel, assign, or otherwise modify additional issues beyond the explicit request.
+- After execution, report the issue number and the change performed.
