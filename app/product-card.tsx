@@ -121,6 +121,8 @@ export function ProductCard({
   const [evaluationFailed, setEvaluationFailed] = useState(false);
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [visibilityFailed, setVisibilityFailed] = useState(false);
+  const [visibilitySignInRequired, setVisibilitySignInRequired] = useState(false);
+  const [visibilityUnauthorized, setVisibilityUnauthorized] = useState(false);
 
   async function evaluateProduct() {
     setEvaluating(true);
@@ -190,6 +192,8 @@ export function ProductCard({
 
     setSavingVisibility(true);
     setVisibilityFailed(false);
+    setVisibilitySignInRequired(false);
+    setVisibilityUnauthorized(false);
 
     try {
       const response = await fetch("/api/product-visibility", {
@@ -201,6 +205,16 @@ export function ProductCard({
         productId?: unknown;
         hidden?: unknown;
       };
+
+      if (response.status === 401) {
+        setVisibilitySignInRequired(true);
+        return;
+      }
+
+      if (response.status === 403) {
+        setVisibilityUnauthorized(true);
+        return;
+      }
 
       if (
         !response.ok ||
@@ -380,7 +394,9 @@ export function ProductCard({
         <span className="mr-auto text-xs text-zinc-400">Visibility</span>
         <button
           type="button"
-          disabled={savingVisibility}
+          disabled={
+            savingVisibility || visibilitySignInRequired || visibilityUnauthorized
+          }
           onClick={saveVisibility}
           className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm transition hover:bg-zinc-50 disabled:cursor-wait disabled:opacity-60"
         >
@@ -390,6 +406,22 @@ export function ProductCard({
       {visibilityFailed ? (
         <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
           Could not update visibility. Try again.
+        </p>
+      ) : null}
+      {visibilitySignInRequired ? (
+        <p className="px-5 pb-3 text-right text-xs text-zinc-600" role="status">
+          <a
+            href={`/api/auth/signin?callbackUrl=${encodeURIComponent(authCallbackPath)}`}
+            className="underline hover:text-zinc-950"
+          >
+            Sign in
+          </a>
+          {" "}to update visibility.
+        </p>
+      ) : null}
+      {visibilityUnauthorized ? (
+        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
+          You don&apos;t have permission to update visibility.
         </p>
       ) : null}
     </article>
