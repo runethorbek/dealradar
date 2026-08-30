@@ -137,6 +137,11 @@ For the first version:
 
 ## Implementation
 
-- [#4](https://github.com/runethorbek/dealradar/issues/4)
-- [#5](https://github.com/runethorbek/dealradar/issues/5)
-- [#6](https://github.com/runethorbek/dealradar/issues/6)
+- [x] [#4 Protect preferences update with authentication](https://github.com/runethorbek/dealradar/issues/4)
+- [x] [#5 Protect product feedback with authentication](https://github.com/runethorbek/dealradar/issues/5)
+- [x] [#6 Protect product visibility with authentication](https://github.com/runethorbek/dealradar/issues/6)
+- [ ] [#8 Protect manual product evaluation with authentication](https://github.com/runethorbek/dealradar/issues/8)
+- [ ] [#9 Make protected write controls authentication-aware](https://github.com/runethorbek/dealradar/issues/9)
+- [ ] [#10 Complete route-level authentication regression coverage](https://github.com/runethorbek/dealradar/issues/10)
+- [ ] [#11 Verify authentication and authorization in the deployed application](https://github.com/runethorbek/dealradar/issues/11)
+- [ ] [#12 Retry or backfill missing product evaluations](https://github.com/runethorbek/dealradar/issues/12)
