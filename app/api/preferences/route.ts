@@ -1,8 +1,8 @@
 import { getServerSession } from "next-auth";
 import { neon } from "@neondatabase/serverless";
-import { authOptions } from "../../../auth.ts";
-import { authorizeOwner } from "../../../lib/owner-authorization.mts";
-import { handlePreferencesPost } from "../../../lib/preferences-api.mts";
+import { authOptions } from "@/auth";
+import { authorizeOwner } from "@/lib/owner-authorization.mts";
+import { handlePreferencesPost } from "@/lib/preferences-api.mts";
 
 export const dynamic = "force-dynamic";
 
