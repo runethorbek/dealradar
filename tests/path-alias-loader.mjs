@@ -3,6 +3,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 
 export function resolve(specifier, context, nextResolve) {
+  if (specifier === "server-only") {
+    return {
+      url: new URL("./server-only.mjs", import.meta.url).href,
+      shortCircuit: true,
+    };
+  }
+
   if (specifier.startsWith("@/")) {
     const relativePath = specifier.slice(2);
     const extension = relativePath.includes(".") ? "" : ".ts";

@@ -3,30 +3,23 @@ import { after, mock, test } from "node:test";
 
 const authOptions = { testOnly: true };
 const authModule = new URL("../auth.ts", import.meta.url).href;
-const ownerAuthorizationModule = new URL(
-  "../lib/owner-authorization.mts",
-  import.meta.url,
-).href;
-const productEvaluationModule = new URL(
-  "../lib/product-evaluation.ts",
-  import.meta.url,
-).href;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalGeminiApiKey = process.env.GEMINI_API_KEY;
+const originalOwnerEmail = process.env.OWNER_EMAIL;
 let session: { user?: { email?: string | null; emailVerified?: boolean } } | null;
-let authorization: "authorized" | "unauthenticated" | "unauthorized";
 let sessionCalls = 0;
-let authorizationUsers: unknown[] = [];
-let evaluationCalls: unknown[] = [];
+let neonCalls = 0;
+let persistenceCalls = 0;
+let geminiClientCalls = 0;
+let geminiRequestCalls = 0;
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
+process.env.OWNER_EMAIL = "owner@example.com";
 
 function mockModule(specifier: string, exports: Record<string, unknown>) {
   mock.module(specifier, { exports } as never);
 }
-
-class ProductNotFoundError extends Error {}
 
 mockModule("next-auth", {
   getServerSession: async (options: unknown) => {
@@ -36,23 +29,52 @@ mockModule("next-auth", {
   },
 });
 mockModule(authModule, { authOptions });
-mockModule(ownerAuthorizationModule, {
-  authorizeOwner: (user: unknown) => {
-    authorizationUsers.push(user);
-    return { status: authorization };
+mockModule("@neondatabase/serverless", {
+  neon: () => {
+    neonCalls += 1;
+
+    return async (strings: TemplateStringsArray) => {
+      persistenceCalls += 1;
+      const query = strings.join(" ");
+
+      if (query.includes("FROM products")) {
+        return [{ title: "Test product" }];
+      }
+
+      if (query.includes("FROM preferences")) return [];
+      if (query.includes("FROM product_feedback")) return [];
+      if (query.includes("FROM product_snapshots")) return [];
+
+      return [
+        {
+          productId: "42",
+          preferenceScore: 8,
+          dealScore: 7,
+          reason: "Strong preference match at a good price.",
+          evaluatedAt: "2026-08-30T12:00:00.000Z",
+        },
+      ];
+    };
   },
 });
-mockModule(productEvaluationModule, {
-  ProductNotFoundError,
-  evaluateProduct: async (input: unknown) => {
-    evaluationCalls.push(input);
-    return {
-      productId: "42",
-      preferenceScore: 8,
-      dealScore: 7,
-      reason: "Strong preference match at a good price.",
-      evaluatedAt: "2026-08-30T12:00:00.000Z",
+mockModule("@google/genai", {
+  GoogleGenAI: class {
+    models = {
+      generateContent: async () => {
+        geminiRequestCalls += 1;
+        return {
+          text: JSON.stringify({
+            preferenceScore: 8,
+            dealScore: 7,
+            reason: "Strong preference match at a good price.",
+          }),
+        };
+      },
     };
+
+    constructor() {
+      geminiClientCalls += 1;
+    }
   },
 });
 
@@ -64,14 +86,18 @@ after(() => {
 
   if (originalGeminiApiKey === undefined) delete process.env.GEMINI_API_KEY;
   else process.env.GEMINI_API_KEY = originalGeminiApiKey;
+
+  if (originalOwnerEmail === undefined) delete process.env.OWNER_EMAIL;
+  else process.env.OWNER_EMAIL = originalOwnerEmail;
 });
 
-function reset(status: typeof authorization, user = session?.user) {
-  authorization = status;
-  session = user ? { user } : null;
+function reset(nextSession: typeof session) {
+  session = nextSession;
   sessionCalls = 0;
-  authorizationUsers = [];
-  evaluationCalls = [];
+  neonCalls = 0;
+  persistenceCalls = 0;
+  geminiClientCalls = 0;
+  geminiRequestCalls = 0;
 }
 
 function evaluationRequest(body = JSON.stringify({ productId: "42" })) {
@@ -82,45 +108,45 @@ function evaluationRequest(body = JSON.stringify({ productId: "42" })) {
   });
 }
 
-test("returns 401 before parsing or evaluation without a session", async () => {
-  reset("unauthenticated");
+test("returns 401 before persistence or Gemini without a session", async () => {
+  reset(null);
 
   const response = await POST(evaluationRequest("not-json"));
 
   assert.equal(response.status, 401);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [undefined]);
-  assert.deepEqual(evaluationCalls, []);
+  assert.equal(neonCalls, 0);
+  assert.equal(persistenceCalls, 0);
+  assert.equal(geminiClientCalls, 0);
+  assert.equal(geminiRequestCalls, 0);
 });
 
-test("returns 403 before parsing or evaluation for a non-owner", async () => {
+test("returns 403 before persistence or Gemini for a non-owner", async () => {
   const user = { email: "other@example.com", emailVerified: true };
-  reset("unauthorized", user);
+  reset({ user });
 
   const response = await POST(evaluationRequest("not-json"));
 
   assert.equal(response.status, 403);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
-  assert.deepEqual(evaluationCalls, []);
+  assert.equal(neonCalls, 0);
+  assert.equal(persistenceCalls, 0);
+  assert.equal(geminiClientCalls, 0);
+  assert.equal(geminiRequestCalls, 0);
 });
 
 test("allows the owner to preserve successful evaluation behavior", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
 
   const response = await POST(evaluationRequest());
 
   assert.equal(response.status, 200);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
-  assert.deepEqual(evaluationCalls, [
-    {
-      productId: "42",
-      databaseUrl: "postgresql://test-only",
-      apiKey: "test-only",
-    },
-  ]);
+  assert.equal(neonCalls, 1);
+  assert.equal(persistenceCalls, 5);
+  assert.equal(geminiClientCalls, 1);
+  assert.equal(geminiRequestCalls, 1);
   assert.deepEqual(await response.json(), {
     success: true,
     evaluation: {
