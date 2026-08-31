@@ -144,6 +144,6 @@ For the first version:
 - [x] [#6 Protect product visibility with authentication](https://github.com/runethorbek/dealradar/issues/6)
 - [x] [#7 Make sign-in/sign-out available outside Preferences](https://github.com/runethorbek/dealradar/issues/7)
 - [x] [#8 Protect manual product evaluation with authentication](https://github.com/runethorbek/dealradar/issues/8)
-- [ ] [#9 Make protected write controls authentication-aware](https://github.com/runethorbek/dealradar/issues/9)
+- [x] [#9 Make protected write controls authentication-aware](https://github.com/runethorbek/dealradar/issues/9)
 - [ ] [#10 Complete route-level authentication regression coverage](https://github.com/runethorbek/dealradar/issues/10)
 - [ ] [#11 Verify authentication and authorization in the deployed application](https://github.com/runethorbek/dealradar/issues/11)
