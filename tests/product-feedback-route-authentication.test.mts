@@ -3,18 +3,14 @@ import { after, mock, test } from "node:test";
 
 const authOptions = { testOnly: true };
 const authModule = new URL("../auth.ts", import.meta.url).href;
-const ownerAuthorizationModule = new URL(
-  "../lib/owner-authorization.mts",
-  import.meta.url,
-).href;
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalOwnerEmail = process.env.OWNER_EMAIL;
 let session: { user?: { email?: string | null; emailVerified?: boolean } } | null;
-let authorization: "authorized" | "unauthenticated" | "unauthorized";
 let persistedRatings: string[] = [];
 let sessionCalls = 0;
-let authorizationUsers: unknown[] = [];
 
 process.env.DATABASE_URL = "postgresql://test-only";
+process.env.OWNER_EMAIL = "owner@example.com";
 
 function mockModule(specifier: string, exports: Record<string, unknown>) {
   mock.module(specifier, { exports } as never);
@@ -29,13 +25,6 @@ mockModule("next-auth", {
 });
 
 mockModule(authModule, { authOptions });
-
-mockModule(ownerAuthorizationModule, {
-  authorizeOwner: (user: unknown) => {
-    authorizationUsers.push(user);
-    return { status: authorization };
-  },
-});
 
 mockModule("@neondatabase/serverless", {
   neon: () => async (_strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -54,14 +43,18 @@ after(() => {
   } else {
     process.env.DATABASE_URL = originalDatabaseUrl;
   }
+
+  if (originalOwnerEmail === undefined) {
+    delete process.env.OWNER_EMAIL;
+  } else {
+    process.env.OWNER_EMAIL = originalOwnerEmail;
+  }
 });
 
-function reset(status: typeof authorization, user = session?.user) {
-  authorization = status;
-  session = user ? { user } : null;
+function reset(user: typeof session) {
+  session = user;
   persistedRatings = [];
   sessionCalls = 0;
-  authorizationUsers = [];
 }
 
 function feedbackRequest(rating = "like") {
@@ -73,37 +66,34 @@ function feedbackRequest(rating = "like") {
 }
 
 test("the product feedback route returns 401 before persistence without a session", async () => {
-  reset("unauthenticated");
+  reset(null);
 
   const response = await POST(feedbackRequest());
 
   assert.equal(response.status, 401);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [undefined]);
   assert.deepEqual(persistedRatings, []);
 });
 
 test("the product feedback route returns 403 before persistence for a non-owner", async () => {
   const user = { email: "other@example.com", emailVerified: true };
-  reset("unauthorized", user);
+  reset({ user });
 
   const response = await POST(feedbackRequest());
 
   assert.equal(response.status, 403);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
   assert.deepEqual(persistedRatings, []);
 });
 
 test("the product feedback route persists valid feedback for the authorized owner", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
 
   const response = await POST(feedbackRequest("dislike"));
 
   assert.equal(response.status, 200);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
   assert.deepEqual(persistedRatings, ["dislike"]);
   assert.deepEqual(await response.json(), { success: true, rating: "dislike" });
 });
