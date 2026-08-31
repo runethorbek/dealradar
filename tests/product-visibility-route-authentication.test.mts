@@ -3,19 +3,17 @@ import { after, mock, test } from "node:test";
 
 const authOptions = { testOnly: true };
 const authModule = new URL("../auth.ts", import.meta.url).href;
-const ownerAuthorizationModule = new URL(
-  "../lib/owner-authorization.mts",
-  import.meta.url,
-).href;
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalOwnerEmail = process.env.OWNER_EMAIL;
 let session: { user?: { email?: string | null; emailVerified?: boolean } } | null;
-let authorization: "authorized" | "unauthenticated" | "unauthorized";
 let persistedHidden: boolean[] = [];
 let sessionCalls = 0;
-let authorizationUsers: unknown[] = [];
+let neonCalls = 0;
+let persistenceCalls = 0;
 let databaseResult: "product" | "not-found" | "error" = "product";
 
 process.env.DATABASE_URL = "postgresql://test-only";
+process.env.OWNER_EMAIL = "owner@example.com";
 
 function mockModule(specifier: string, exports: Record<string, unknown>) {
   mock.module(specifier, { exports } as never);
@@ -29,20 +27,18 @@ mockModule("next-auth", {
   },
 });
 mockModule(authModule, { authOptions });
-mockModule(ownerAuthorizationModule, {
-  authorizeOwner: (user: unknown) => {
-    authorizationUsers.push(user);
-    return { status: authorization };
-  },
-});
 mockModule("@neondatabase/serverless", {
-  neon: () => async (_strings: TemplateStringsArray, ...values: unknown[]) => {
-    assert.equal(typeof values[0], "boolean");
-    assert.equal(typeof values[1], "string");
-    if (databaseResult === "error") throw new Error("database failure");
-    persistedHidden.push(values[0] as boolean);
-    if (databaseResult === "not-found") return [];
-    return [{ productId: values[1], hidden: values[0] }];
+  neon: () => {
+    neonCalls += 1;
+    return async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      persistenceCalls += 1;
+      assert.equal(typeof values[0], "boolean");
+      assert.equal(typeof values[1], "string");
+      if (databaseResult === "error") throw new Error("database failure");
+      persistedHidden.push(values[0] as boolean);
+      if (databaseResult === "not-found") return [];
+      return [{ productId: values[1], hidden: values[0] }];
+    };
   },
 });
 
@@ -51,14 +47,17 @@ const { POST } = await import("../app/api/product-visibility/route.ts");
 after(() => {
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = originalDatabaseUrl;
+
+  if (originalOwnerEmail === undefined) delete process.env.OWNER_EMAIL;
+  else process.env.OWNER_EMAIL = originalOwnerEmail;
 });
 
-function reset(status: typeof authorization, user = session?.user) {
-  authorization = status;
-  session = user ? { user } : null;
+function reset(nextSession: typeof session) {
+  session = nextSession;
   persistedHidden = [];
   sessionCalls = 0;
-  authorizationUsers = [];
+  neonCalls = 0;
+  persistenceCalls = 0;
   databaseResult = "product";
 }
 
@@ -71,31 +70,34 @@ function visibilityRequest(hidden = true) {
 }
 
 test("returns 401 before persistence without a session", async () => {
-  reset("unauthenticated");
+  reset(null);
   const response = await POST(visibilityRequest());
   assert.equal(response.status, 401);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [undefined]);
+  assert.equal(neonCalls, 0);
+  assert.equal(persistenceCalls, 0);
   assert.deepEqual(persistedHidden, []);
 });
 
 test("returns 403 before persistence for a non-owner", async () => {
   const user = { email: "other@example.com", emailVerified: true };
-  reset("unauthorized", user);
+  reset({ user });
   const response = await POST(visibilityRequest());
   assert.equal(response.status, 403);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
+  assert.equal(neonCalls, 0);
+  assert.equal(persistenceCalls, 0);
   assert.deepEqual(persistedHidden, []);
 });
 
 test("persists visibility for the authorized owner", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
   const response = await POST(visibilityRequest(false));
   assert.equal(response.status, 200);
   assert.equal(sessionCalls, 1);
-  assert.deepEqual(authorizationUsers, [user]);
+  assert.equal(neonCalls, 1);
+  assert.equal(persistenceCalls, 1);
   assert.deepEqual(persistedHidden, [false]);
   assert.deepEqual(await response.json(), {
     success: true,
@@ -106,7 +108,7 @@ test("persists visibility for the authorized owner", async () => {
 
 test("authorized requests preserve validation responses", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
 
   const invalidJson = new Request("http://localhost/api/product-visibility", {
     method: "POST",
@@ -124,7 +126,7 @@ test("authorized requests preserve validation responses", async () => {
 
 test("returns 404 when the authorized product does not exist", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
   databaseResult = "not-found";
 
   const response = await POST(visibilityRequest());
@@ -138,7 +140,7 @@ test("returns 404 when the authorized product does not exist", async () => {
 
 test("returns 500 when visibility persistence fails", async () => {
   const user = { email: "owner@example.com", emailVerified: true };
-  reset("authorized", user);
+  reset({ user });
   databaseResult = "error";
 
   const response = await POST(visibilityRequest());
