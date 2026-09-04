@@ -21,6 +21,6 @@ export type ProductCardProduct = {
   hidden: boolean;
   feedback: Rating | null;
   evaluation: ProductEvaluation | null;
-  observationCount: number | null;
-  lowestObservedPrice: string | null;
+  observationCount?: number | null;
+  lowestObservedPrice?: string | null;
 };

@@ -98,8 +98,8 @@ test("dashboard queries include SQL snapshot aggregates for count and minimum pr
     return query;
   };
 
-  const fields = snapshotSummaryFields(renderSql);
-  const join = snapshotSummaryJoin(renderSql);
+  const fields = snapshotSummaryFields(renderSql) as string;
+  const join = snapshotSummaryJoin(renderSql) as string;
 
   assert.match(fields, /COALESCE\(snapshot_stats\.observation_count, 0\)::INT AS "observationCount"/);
   assert.match(fields, /snapshot_stats\.lowest_observed_price::TEXT AS "lowestObservedPrice"/);

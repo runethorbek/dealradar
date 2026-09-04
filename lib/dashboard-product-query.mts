@@ -1,12 +1,17 @@
 import type { ProductCardProduct } from "./dashboard-product.mts";
 import { includeRequestedProduct, type Visibility } from "./dashboard-products.mts";
 
-export const snapshotSummaryFields = (sql: DashboardSql) => sql`
+type DashboardSqlFragment = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => unknown;
+
+export const snapshotSummaryFields = (sql: DashboardSqlFragment) => sql`
   COALESCE(snapshot_stats.observation_count, 0)::INT AS "observationCount",
   snapshot_stats.lowest_observed_price::TEXT AS "lowestObservedPrice"
 `;
 
-export const snapshotSummaryJoin = (sql: DashboardSql) => sql`
+export const snapshotSummaryJoin = (sql: DashboardSqlFragment) => sql`
   LEFT JOIN (
     SELECT
       product_id,
@@ -22,7 +27,7 @@ export type DashboardSort = "best_match" | "best_deal" | "newest";
 export type DashboardSql = (
   strings: TemplateStringsArray,
   ...values: unknown[]
-) => Promise<unknown[]> | unknown;
+) => Promise<unknown[]>;
 export async function getLatestDashboardProducts(
   sql: DashboardSql,
   source: string | null,
