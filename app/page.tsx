@@ -4,16 +4,20 @@ import { connection } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import {
-  includeRequestedProduct,
   parseVisibility,
   parseProductId,
   type Visibility,
 } from "@/lib/dashboard-products.mts";
+import {
+  getLatestDashboardProducts,
+  type DashboardSort,
+  type DashboardSql,
+} from "@/lib/dashboard-product-query.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 import { AppNavigation } from "./navigation";
 
 type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
-type Sort = "best_match" | "best_deal" | "newest";
+type Sort = DashboardSort;
 
 const sourceFilters: { label: string; value: Source | null }[] = [
   { label: "All", value: null },
@@ -77,127 +81,13 @@ async function getLatestProducts(
 
   try {
     const sql = neon(databaseUrl);
-    const rows = source
-      ? await sql`
-          SELECT
-            p.id::TEXT AS id,
-            p.external_url AS "externalUrl",
-            p.title,
-            p.image_url AS "imageUrl",
-            p.source,
-            p.current_price::TEXT AS "currentPrice",
-            p.original_price::TEXT AS "originalPrice",
-            p.currency,
-            p.discount_percent::TEXT AS "discountPercent",
-            p.last_seen_at::TEXT AS "lastSeenAt",
-            p.hidden,
-            pf.rating AS feedback,
-            CASE
-              WHEN pe.product_id IS NULL THEN NULL
-              ELSE json_build_object(
-                'preferenceScore', pe.preference_score,
-                'dealScore', pe.deal_score,
-                'reason', pe.reason,
-                'evaluatedAt', pe.evaluated_at::TEXT
-              )
-            END AS evaluation
-          FROM products p
-          LEFT JOIN product_feedback pf ON pf.product_id = p.id
-          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
-          WHERE p.source = ${source}
-            AND p.hidden = ${visibility === "hidden"}
-          ORDER BY
-            (pe.product_id IS NULL) ASC,
-            CASE
-              WHEN ${sort} = 'best_match'
-              THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
-            END DESC NULLS LAST,
-            CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
-            CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
-            p.last_seen_at DESC
-          LIMIT 50
-        `
-      : await sql`
-          SELECT
-            p.id::TEXT AS id,
-            p.external_url AS "externalUrl",
-            p.title,
-            p.image_url AS "imageUrl",
-            p.source,
-            p.current_price::TEXT AS "currentPrice",
-            p.original_price::TEXT AS "originalPrice",
-            p.currency,
-            p.discount_percent::TEXT AS "discountPercent",
-            p.last_seen_at::TEXT AS "lastSeenAt",
-            p.hidden,
-            pf.rating AS feedback,
-            CASE
-              WHEN pe.product_id IS NULL THEN NULL
-              ELSE json_build_object(
-                'preferenceScore', pe.preference_score,
-                'dealScore', pe.deal_score,
-                'reason', pe.reason,
-                'evaluatedAt', pe.evaluated_at::TEXT
-              )
-            END AS evaluation
-          FROM products p
-          LEFT JOIN product_feedback pf ON pf.product_id = p.id
-          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
-          WHERE p.hidden = ${visibility === "hidden"}
-          ORDER BY
-            (pe.product_id IS NULL) ASC,
-            CASE
-              WHEN ${sort} = 'best_match'
-              THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
-            END DESC NULLS LAST,
-            CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
-            CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
-            p.last_seen_at DESC
-          LIMIT 50
-        `;
-
-    const products = rows as ProductCardProduct[];
-
-    if (
-      !highlightedProductId ||
-      products.some((product) => product.id === highlightedProductId)
-    ) {
-      return { products, failed: false };
-    }
-
-    const [highlightedProduct] = await sql`
-      SELECT
-        p.id::TEXT AS id,
-        p.external_url AS "externalUrl",
-        p.title,
-        p.image_url AS "imageUrl",
-        p.source,
-        p.current_price::TEXT AS "currentPrice",
-        p.original_price::TEXT AS "originalPrice",
-        p.currency,
-        p.discount_percent::TEXT AS "discountPercent",
-        p.last_seen_at::TEXT AS "lastSeenAt",
-        p.hidden,
-        pf.rating AS feedback,
-        CASE
-          WHEN pe.product_id IS NULL THEN NULL
-          ELSE json_build_object(
-            'preferenceScore', pe.preference_score,
-            'dealScore', pe.deal_score,
-            'reason', pe.reason,
-            'evaluatedAt', pe.evaluated_at::TEXT
-          )
-        END AS evaluation
-      FROM products p
-      LEFT JOIN product_feedback pf ON pf.product_id = p.id
-      LEFT JOIN product_evaluations pe ON pe.product_id = p.id
-      WHERE p.id = ${highlightedProductId}
-    `;
-
     return {
-      products: includeRequestedProduct(
-        products,
-        highlightedProduct as ProductCardProduct | undefined,
+      products: await getLatestDashboardProducts(
+        sql as DashboardSql,
+        source,
+        sort,
+        visibility,
+        highlightedProductId,
       ),
       failed: false,
     };
