@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getLatestDashboardProducts } from "../lib/dashboard-product-query.mts";
+import {
+  getLatestDashboardProducts,
+  snapshotSummaryFields,
+  snapshotSummaryJoin,
+} from "../lib/dashboard-product-query.mts";
 
 type ProductRow = {
   id: string;
@@ -23,6 +27,11 @@ function isFresh(product: ProductRow) {
 
 async function sql(strings: TemplateStringsArray) {
   const query = strings.join("$parameter");
+
+  if (!query.includes("FROM products")) {
+    return [];
+  }
+
   const products = query.includes("WHERE p.id =")
     ? highlightedProducts
     : listProducts;
@@ -73,6 +82,31 @@ test("dashboard list queries return products at the inclusive cutoff and exclude
   assert.deepEqual(sourceFiltered.map((product) => product.id), ["fresh"]);
   assert.equal(queryCalls.length, 2);
   for (const call of queryCalls) assertFreshnessQuery(call.query);
+});
+
+test("dashboard queries include SQL snapshot aggregates for count and minimum price", () => {
+  const renderSql = (strings: TemplateStringsArray, ...values: unknown[]) => {
+    let query = "";
+
+    strings.forEach((chunk, index) => {
+      query += chunk;
+      if (index < values.length) {
+        query += String(values[index]);
+      }
+    });
+
+    return query;
+  };
+
+  const fields = snapshotSummaryFields(renderSql);
+  const join = snapshotSummaryJoin(renderSql);
+
+  assert.match(fields, /COALESCE\(snapshot_stats\.observation_count, 0\)::INT AS "observationCount"/);
+  assert.match(fields, /snapshot_stats\.lowest_observed_price::TEXT AS "lowestObservedPrice"/);
+  assert.match(join, /COUNT\(current_price\) AS observation_count/);
+  assert.doesNotMatch(join, /COUNT\(DISTINCT current_price\)/);
+  assert.match(join, /MIN\(current_price\) AS lowest_observed_price/);
+  assert.match(join, /WHERE current_price IS NOT NULL/);
 });
 
 test("the highlighted-product fallback cannot reintroduce a stale product", async () => {

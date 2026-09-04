@@ -1,11 +1,28 @@
 import type { ProductCardProduct } from "./dashboard-product.mts";
 import { includeRequestedProduct, type Visibility } from "./dashboard-products.mts";
 
+export const snapshotSummaryFields = (sql: DashboardSql) => sql`
+  COALESCE(snapshot_stats.observation_count, 0)::INT AS "observationCount",
+  snapshot_stats.lowest_observed_price::TEXT AS "lowestObservedPrice"
+`;
+
+export const snapshotSummaryJoin = (sql: DashboardSql) => sql`
+  LEFT JOIN (
+    SELECT
+      product_id,
+      COUNT(current_price) AS observation_count,
+      MIN(current_price) AS lowest_observed_price
+    FROM product_snapshots
+    WHERE current_price IS NOT NULL
+    GROUP BY product_id
+  ) snapshot_stats ON snapshot_stats.product_id = p.id
+`;
+
 export type DashboardSort = "best_match" | "best_deal" | "newest";
 export type DashboardSql = (
   strings: TemplateStringsArray,
   ...values: unknown[]
-) => Promise<unknown[]>;
+) => Promise<unknown[]> | unknown;
 export async function getLatestDashboardProducts(
   sql: DashboardSql,
   source: string | null,
@@ -36,10 +53,12 @@ export async function getLatestDashboardProducts(
               'reason', pe.reason,
               'evaluatedAt', pe.evaluated_at::TEXT
             )
-          END AS evaluation
+          END AS evaluation,
+          ${snapshotSummaryFields(sql)}
         FROM products p
         LEFT JOIN product_feedback pf ON pf.product_id = p.id
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+        ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
           AND p.hidden = ${visibility === "hidden"}
           AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
@@ -76,10 +95,12 @@ export async function getLatestDashboardProducts(
               'reason', pe.reason,
               'evaluatedAt', pe.evaluated_at::TEXT
             )
-          END AS evaluation
+          END AS evaluation,
+          ${snapshotSummaryFields(sql)}
         FROM products p
         LEFT JOIN product_feedback pf ON pf.product_id = p.id
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+        ${snapshotSummaryJoin(sql)}
         WHERE p.hidden = ${visibility === "hidden"}
           AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
         ORDER BY
@@ -125,10 +146,12 @@ export async function getLatestDashboardProducts(
           'reason', pe.reason,
           'evaluatedAt', pe.evaluated_at::TEXT
         )
-      END AS evaluation
+      END AS evaluation,
+      ${snapshotSummaryFields(sql)}
     FROM products p
     LEFT JOIN product_feedback pf ON pf.product_id = p.id
     LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+    ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}
       AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
   `;
