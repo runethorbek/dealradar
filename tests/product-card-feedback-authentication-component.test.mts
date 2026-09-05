@@ -85,6 +85,40 @@ async function renderProductCard(
 
 const renderFeedbackCard = renderProductCard;
 
+test("renders a compact price history summary when the current price sits above the historical minimum", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: true }),
+    {
+      ...product,
+      observationCount: 4,
+      lowestObservedPrice: "699",
+      currentPrice: "749",
+    },
+  );
+
+  assert.match(container.textContent ?? "", /4 observations/i);
+  assert.match(container.textContent ?? "", /lowest/i);
+  assert.match(container.textContent ?? "", /now \+7%/i);
+  assert.doesNotMatch(container.textContent ?? "", /lowest now/i);
+  assert.doesNotMatch(container.textContent ?? "", /no history yet/i);
+});
+
+test("renders a single-observation note without implying historical price movement", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: true }),
+    {
+      ...product,
+      observationCount: 1,
+      lowestObservedPrice: "699",
+      currentPrice: "699",
+    },
+  );
+
+  assert.match(container.textContent ?? "", /1 observation/i);
+  assert.match(container.textContent ?? "", /no history yet/i);
+  assert.doesNotMatch(container.textContent ?? "", /lowest/i);
+});
+
 async function clickFeedback(container: HTMLElement, label: "Like" | "Not for me") {
   const button = container.querySelector<HTMLButtonElement>(
     `button[aria-label="${label}"]`,

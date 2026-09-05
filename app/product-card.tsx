@@ -9,6 +9,7 @@ import type {
   ProductEvaluation,
   Rating,
 } from "@/lib/dashboard-product.mts";
+import { getPriceHistorySummary } from "@/lib/price-history-summary.mts";
 
 export type { ProductCardProduct, ProductEvaluation, Rating };
 
@@ -73,6 +74,40 @@ function formatLastSeen(value: string) {
     timeStyle: "short",
     timeZone: "UTC",
   }).format(date);
+}
+
+function getPriceHistoryLabel(product: ProductCardProduct) {
+  const summary = getPriceHistorySummary(
+    product.observationCount,
+    product.lowestObservedPrice,
+    product.currentPrice,
+  );
+
+  if (!summary) {
+    return null;
+  }
+
+  const countText = `${summary.observationCount} ${summary.observationCount === 1 ? "observation" : "observations"}`;
+
+  if (summary.comparison?.kind === "no-history") {
+    return `${countText} • no history yet`;
+  }
+
+  if (summary.lowestObservedPrice === null) {
+    return null;
+  }
+
+  const lowestText = `lowest ${formatPrice(String(summary.lowestObservedPrice), product.currency)}`;
+
+  if (summary.comparison?.kind === "lowest-now") {
+    return `${countText} • ${lowestText} • lowest now`;
+  }
+
+  if (summary.comparison?.kind === "above-lowest") {
+    return `${countText} • ${lowestText} • now +${summary.comparison.percentage}%`;
+  }
+
+  return `${countText} • ${lowestText}`;
 }
 
 function getOverallScore(evaluation: ProductEvaluation) {
@@ -290,6 +325,13 @@ export function ProductCard({
               </p>
             ) : null}
           </div>
+
+          {(() => {
+            const priceHistoryLabel = getPriceHistoryLabel(product);
+            return priceHistoryLabel ? (
+              <p className="mt-3 text-xs text-zinc-500">{priceHistoryLabel}</p>
+            ) : null;
+          })()}
 
           <p className="mt-4 border-t border-zinc-100 pt-4 text-xs text-zinc-400">
             Last seen {formatLastSeen(product.lastSeenAt)} UTC
