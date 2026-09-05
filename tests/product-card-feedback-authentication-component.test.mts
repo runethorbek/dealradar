@@ -3,6 +3,7 @@ import { after, afterEach, beforeEach, mock, test } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { ProductCardProduct } from "../lib/dashboard-product.mts";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 let refreshCalls = 0;
@@ -28,7 +29,7 @@ mock.module("next/navigation", {
 
 const { ProductCard } = await import("../app/product-card.tsx");
 
-const product = {
+const product: ProductCardProduct = {
   id: "42",
   externalUrl: "https://example.com/product",
   title: "Test product",
@@ -66,7 +67,7 @@ after(() => {
 
 async function renderProductCard(
   response: Response,
-  cardProduct: typeof product = product,
+  cardProduct: ProductCardProduct = product,
 ) {
   globalThis.fetch = async () => response;
 
