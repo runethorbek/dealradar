@@ -19,6 +19,7 @@ export const snapshotSummaryJoin = (sql: DashboardSqlFragment) => sql`
       MIN(current_price) AS lowest_observed_price
     FROM product_snapshots
     WHERE current_price IS NOT NULL
+      AND current_price >= 0
     GROUP BY product_id
   ) snapshot_stats ON snapshot_stats.product_id = p.id
 `;
