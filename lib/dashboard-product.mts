@@ -19,6 +19,7 @@ export type ProductCardProduct = {
   discountPercent: string | null;
   lastSeenAt: string;
   hidden: boolean;
+  watched: boolean;
   feedback: Rating | null;
   evaluation: ProductEvaluation | null;
   observationCount?: number | null;

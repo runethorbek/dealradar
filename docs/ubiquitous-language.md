@@ -64,6 +64,26 @@ feedback. Like and Not for me never change product visibility. Unhide restores
 eligibility for future product recommendations but does not itself trigger a
 notification.
 
+## Watch
+
+A reversible tracking-intent action meaning:
+
+> "I am specifically interested in this product and want to keep an eye on
+> it over time."
+
+The active state is called **Watched**, and watched products can be retrieved
+through the **Watchlist** view. Watch is independent from visibility and
+preference feedback: watching does not Like, unhide, hide, or otherwise
+re-rank a product, and those actions do not change Watch state.
+
+The Watchlist includes both visible and hidden watched products. Hidden
+products remain clearly identified as Hidden there; Watch does not change
+their visibility.
+
+Watch currently records persistent explicit interest only. Target prices,
+price alerts, notifications, evaluation input, and higher-priority treatment
+are intentionally deferred.
+
 ## Preference score
 
 A score from 1-10 representing how well the product matches the user's

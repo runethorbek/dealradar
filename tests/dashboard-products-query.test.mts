@@ -9,6 +9,8 @@ import {
 type ProductRow = {
   id: string;
   lastSeenAt: string;
+  hidden?: boolean;
+  watched?: boolean;
   observationCount?: number;
   lowestObservedPrice?: string | null;
 };
@@ -20,6 +22,7 @@ type SnapshotRow = {
 
 type QueryCall = {
   query: string;
+  values: unknown[];
   products: ProductRow[];
 };
 
@@ -33,7 +36,7 @@ function isFresh(product: ProductRow) {
   return new Date(product.lastSeenAt).getTime() >= cutoff.getTime();
 }
 
-async function sql(strings: TemplateStringsArray) {
+async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   const query = strings.join("$parameter");
 
   if (!query.includes("FROM products")) {
@@ -44,7 +47,7 @@ async function sql(strings: TemplateStringsArray) {
     ? highlightedProducts
     : listProducts;
 
-  queryCalls.push({ query, products });
+  queryCalls.push({ query, values, products });
 
   const freshProducts = query.includes(
     "p.last_seen_at >= NOW() - INTERVAL '24 hours'",
@@ -52,7 +55,27 @@ async function sql(strings: TemplateStringsArray) {
     ? products.filter(isFresh)
     : products;
 
-  return freshProducts.map((product) => {
+  const highlightedViewFilteredProducts = query.includes("OR p.watched = TRUE")
+    ? freshProducts.filter((product) => {
+        const allowAnyProduct = values.find(
+          (value): value is boolean => typeof value === "boolean",
+        );
+        return allowAnyProduct || product.watched === true;
+      })
+    : freshProducts;
+
+  const viewFilteredProducts = query.includes("AND p.watched = TRUE")
+    ? highlightedViewFilteredProducts.filter((product) => {
+        const [watchlist, , hidden] = values.filter(
+          (value): value is boolean => typeof value === "boolean",
+        );
+        return watchlist
+          ? product.watched === true
+          : (product.hidden ?? false) === hidden;
+      })
+    : highlightedViewFilteredProducts;
+
+  return viewFilteredProducts.map((product) => {
     const validSnapshots = snapshots
       .filter((snapshot) => snapshot.productId === product.id)
       .filter(
@@ -166,6 +189,48 @@ test("dashboard query aggregates repeated valid prices and ignores null and nega
   assert.equal(queryCalls.length, 1);
 });
 
+test("Watchlist returns watched products only and includes persisted Watch state", async () => {
+  reset();
+  listProducts = [
+    {
+      id: "visible-watched",
+      lastSeenAt: cutoff.toISOString(),
+      hidden: false,
+      watched: true,
+    },
+    {
+      id: "hidden-watched",
+      lastSeenAt: cutoff.toISOString(),
+      hidden: true,
+      watched: true,
+    },
+    {
+      id: "not-watched",
+      lastSeenAt: cutoff.toISOString(),
+      hidden: false,
+      watched: false,
+    },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql,
+    null,
+    "best_match",
+    "watchlist",
+    null,
+  );
+
+  assert.deepEqual(
+    result.map(({ id, hidden, watched }) => ({ id, hidden, watched })),
+    [
+      { id: "visible-watched", hidden: false, watched: true },
+      { id: "hidden-watched", hidden: true, watched: true },
+    ],
+  );
+  assert.match(queryCalls[0]?.query ?? "", /p\.watched = TRUE/);
+  assert.match(queryCalls[0]?.query ?? "", /p\.watched,/);
+});
+
 test("the highlighted-product fallback cannot reintroduce a stale product", async () => {
   reset();
   highlightedProducts = [
@@ -183,4 +248,27 @@ test("the highlighted-product fallback cannot reintroduce a stale product", asyn
   assert.deepEqual(result, []);
   assert.equal(queryCalls.length, 2);
   for (const call of queryCalls) assertFreshnessQuery(call.query);
+});
+
+test("the highlighted-product fallback cannot reintroduce an unwatched product into Watchlist", async () => {
+  reset();
+  highlightedProducts = [
+    {
+      id: "not-watched",
+      lastSeenAt: cutoff.toISOString(),
+      watched: false,
+    },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql,
+    null,
+    "best_match",
+    "watchlist",
+    "not-watched",
+  );
+
+  assert.deepEqual(result, []);
+  assert.equal(queryCalls.length, 2);
+  assert.match(queryCalls[1]?.query ?? "", /OR p\.watched = TRUE/);
 });

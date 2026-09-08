@@ -126,6 +126,7 @@ export function ProductCard({
   const router = useRouter();
   const visibilityAction = product.hidden ? "Unhide" : "Hide";
   const visibilityPendingLabel = product.hidden ? "Unhiding..." : "Hiding...";
+  const watchAction = product.watched ? "Unwatch" : "Watch";
   const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
   const [saving, setSaving] = useState<Rating | null>(null);
   const [failed, setFailed] = useState(false);
@@ -142,6 +143,10 @@ export function ProductCard({
   const [visibilityFailed, setVisibilityFailed] = useState(false);
   const [visibilitySignInRequired, setVisibilitySignInRequired] = useState(false);
   const [visibilityUnauthorized, setVisibilityUnauthorized] = useState(false);
+  const [savingWatch, setSavingWatch] = useState(false);
+  const [watchFailed, setWatchFailed] = useState(false);
+  const [watchSignInRequired, setWatchSignInRequired] = useState(false);
+  const [watchUnauthorized, setWatchUnauthorized] = useState(false);
 
   async function evaluateProduct() {
     setEvaluating(true);
@@ -263,6 +268,51 @@ export function ProductCard({
     }
   }
 
+  async function saveWatch() {
+    const watched = !product.watched;
+
+    setSavingWatch(true);
+    setWatchFailed(false);
+    setWatchSignInRequired(false);
+    setWatchUnauthorized(false);
+
+    try {
+      const response = await fetch("/api/product-watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, watched }),
+      });
+      const result = (await response.json()) as {
+        productId?: unknown;
+        watched?: unknown;
+      };
+
+      if (response.status === 401) {
+        setWatchSignInRequired(true);
+        return;
+      }
+
+      if (response.status === 403) {
+        setWatchUnauthorized(true);
+        return;
+      }
+
+      if (
+        !response.ok ||
+        result.productId !== product.id ||
+        result.watched !== watched
+      ) {
+        throw new Error("Watch request failed.");
+      }
+
+      router.refresh();
+    } catch {
+      setWatchFailed(true);
+    } finally {
+      setSavingWatch(false);
+    }
+  }
+
   return (
     <article
       id={`product-${product.id}`}
@@ -295,6 +345,11 @@ export function ProductCard({
               {product.source}
             </p>
             <div className="flex shrink-0 items-center gap-2">
+              {product.watched ? (
+                <span className="rounded-full bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700">
+                  Watched
+                </span>
+              ) : null}
               {product.hidden ? (
                 <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">
                   Hidden
@@ -447,7 +502,20 @@ export function ProductCard({
       ) : null}
 
       <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
-        <span className="mr-auto text-xs text-zinc-400">Visibility</span>
+        <span className="mr-auto text-xs text-zinc-400">Product state</span>
+        <button
+          type="button"
+          aria-pressed={product.watched}
+          disabled={savingWatch || watchSignInRequired || watchUnauthorized}
+          onClick={saveWatch}
+          className={`rounded-md border px-2.5 py-1.5 text-sm transition disabled:cursor-wait disabled:opacity-60 ${
+            product.watched
+              ? "border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+              : "border-zinc-200 bg-white hover:border-indigo-200 hover:text-indigo-700"
+          }`}
+        >
+          {savingWatch ? (product.watched ? "Unwatching..." : "Watching...") : watchAction}
+        </button>
         <button
           type="button"
           disabled={
@@ -459,6 +527,27 @@ export function ProductCard({
           {savingVisibility ? visibilityPendingLabel : visibilityAction}
         </button>
       </div>
+      {watchFailed ? (
+        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
+          Could not update Watch. Try again.
+        </p>
+      ) : null}
+      {watchSignInRequired ? (
+        <p className="px-5 pb-3 text-right text-xs text-zinc-600" role="status">
+          <a
+            href={`/api/auth/signin?callbackUrl=${encodeURIComponent(authCallbackPath)}`}
+            className="underline hover:text-zinc-950"
+          >
+            Sign in
+          </a>
+          {" "}to update Watch.
+        </p>
+      ) : null}
+      {watchUnauthorized ? (
+        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
+          You don&apos;t have permission to update Watch.
+        </p>
+      ) : null}
       {visibilityFailed ? (
         <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
           Could not update visibility. Try again.

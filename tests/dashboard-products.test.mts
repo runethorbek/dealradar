@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   includeRequestedProduct,
-  parseVisibility,
+  parseDashboardView,
   parseProductId,
 } from "../lib/dashboard-products.mts";
 
-test("parseVisibility defaults to Visible and accepts Hidden", () => {
-  assert.equal(parseVisibility(undefined), "visible");
-  assert.equal(parseVisibility("visible"), "visible");
-  assert.equal(parseVisibility("hidden"), "hidden");
-  assert.equal(parseVisibility("unexpected"), "visible");
+test("parseDashboardView defaults to Visible and accepts Hidden and Watchlist", () => {
+  assert.equal(parseDashboardView(undefined), "visible");
+  assert.equal(parseDashboardView("visible"), "visible");
+  assert.equal(parseDashboardView("hidden"), "hidden");
+  assert.equal(parseDashboardView("watchlist"), "watchlist");
+  assert.equal(parseDashboardView("unexpected"), "visible");
 });
 
 test("parseProductId accepts positive PostgreSQL BIGINT product IDs", () => {

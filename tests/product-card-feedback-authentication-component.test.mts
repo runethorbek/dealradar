@@ -41,6 +41,7 @@ const product: ProductCardProduct = {
   discountPercent: "50",
   lastSeenAt: "2026-08-30T12:00:00.000Z",
   hidden: false,
+  watched: false,
   feedback: null,
   evaluation: null,
 };
@@ -136,6 +137,17 @@ async function clickVisibility(container: HTMLElement, label: "Hide" | "Unhide")
     (candidate) => candidate.textContent === label,
   );
   assert.ok(button, `Expected ${label} visibility control.`);
+
+  await act(async () => {
+    button.click();
+  });
+}
+
+async function clickWatch(container: HTMLElement, label: "Watch" | "Unwatch") {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent === label,
+  );
+  assert.ok(button, `Expected ${label} control.`);
 
   await act(async () => {
     button.click();
@@ -285,6 +297,103 @@ test("authorized Hide and Unhide attempts retain their existing behavior", async
       container.textContent ?? "",
       /Could not update visibility\.|Sign in to update visibility\.|permission to update visibility/,
     );
+
+    await act(async () => {
+      root?.unmount();
+    });
+    root = undefined;
+    refreshCalls = 0;
+    document.body.replaceChildren();
+  }
+});
+
+test("renders watched state distinctly from feedback and visibility", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: true }),
+    { ...product, watched: true, hidden: true, feedback: "dislike" },
+  );
+
+  assert.match(container.textContent ?? "", /Watched/);
+  assert.equal(
+    Array.from(container.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent === "Unwatch",
+    )?.getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    container.querySelector('button[aria-label="Not for me"]')?.getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.match(container.textContent ?? "", /Unhide/);
+});
+
+test("an unauthenticated Watch attempt offers sign-in with the dashboard callback", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: false, error: "Unauthorized." }, { status: 401 }),
+  );
+
+  await clickWatch(container, "Watch");
+
+  const signIn = container.querySelector<HTMLAnchorElement>(
+    'a[href^="/api/auth/signin?"]',
+  );
+  assert.ok(signIn);
+  assert.equal(
+    signIn.getAttribute("href"),
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+  );
+  assert.match(container.textContent ?? "", /to update Watch\./);
+});
+
+test("a non-owner Unwatch attempt explains that Watch is not permitted", async () => {
+  const container = await renderProductCard(
+    Response.json({ success: false, error: "Forbidden." }, { status: 403 }),
+    { ...product, watched: true },
+  );
+
+  await clickWatch(container, "Unwatch");
+
+  assert.match(container.textContent ?? "", /permission to update Watch\./);
+  assert.equal(container.querySelector('a[href^="/api/auth/signin?"]'), null);
+});
+
+test("authorized Watch and Unwatch persist only Watch state and refresh", async () => {
+  for (const watched of [false, true]) {
+    let requestUrl: string | URL | Request | undefined;
+    let requestBody: unknown;
+    globalThis.fetch = async (input, init) => {
+      requestUrl = input;
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({
+        success: true,
+        productId: "42",
+        watched: !watched,
+      });
+    };
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+
+    await act(async () => {
+      root?.render(
+        createElement(ProductCard, {
+          product: { ...product, watched, hidden: true, feedback: "like" },
+          authCallbackPath,
+        }),
+      );
+    });
+
+    await clickWatch(container, watched ? "Unwatch" : "Watch");
+
+    assert.equal(requestUrl, "/api/product-watch");
+    assert.deepEqual(requestBody, { productId: "42", watched: !watched });
+    assert.equal(refreshCalls, 1);
+    assert.equal(
+      container.querySelector('button[aria-label="Like"]')?.getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.match(container.textContent ?? "", /Unhide/);
 
     await act(async () => {
       root?.unmount();

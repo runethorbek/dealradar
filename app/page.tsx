@@ -4,9 +4,9 @@ import { connection } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import {
-  parseVisibility,
+  parseDashboardView,
   parseProductId,
-  type Visibility,
+  type DashboardView,
 } from "@/lib/dashboard-products.mts";
 import {
   getLatestDashboardProducts,
@@ -32,15 +32,16 @@ const sortOptions: { label: string; value: Sort }[] = [
   { label: "Newest", value: "newest" },
 ];
 
-const visibilityOptions: { label: string; value: Visibility }[] = [
+const viewOptions: { label: string; value: DashboardView }[] = [
   { label: "Visible", value: "visible" },
+  { label: "Watchlist", value: "watchlist" },
   { label: "Hidden", value: "hidden" },
 ];
 
 function getDashboardHref(
   source: Source | null,
   sort: Sort,
-  visibility: Visibility,
+  view: DashboardView,
   highlightedProductId?: string | null,
 ) {
   const params = new URLSearchParams();
@@ -53,8 +54,8 @@ function getDashboardHref(
     params.set("sort", sort);
   }
 
-  if (visibility !== "visible") {
-    params.set("view", visibility);
+  if (view !== "visible") {
+    params.set("view", view);
   }
 
   if (highlightedProductId) {
@@ -68,7 +69,7 @@ function getDashboardHref(
 async function getLatestProducts(
   source: Source | null,
   sort: Sort,
-  visibility: Visibility,
+  view: DashboardView,
   highlightedProductId: string | null,
 ) {
   await connection();
@@ -86,7 +87,7 @@ async function getLatestProducts(
         sql as DashboardSql,
         source,
         sort,
-        visibility,
+        view,
         highlightedProductId,
       ),
       failed: false,
@@ -101,7 +102,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const session = await getServerSession(authOptions);
   const requestedSource = query.source;
   const requestedSort = query.sort;
-  const selectedVisibility = parseVisibility(query.view);
+  const selectedView = parseDashboardView(query.view);
   const highlightedProductId = parseProductId(query.product);
   const selectedSource = sourceFilters.some(
     (filter) => filter.value === requestedSource,
@@ -116,7 +117,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const { products, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
-    selectedVisibility,
+    selectedView,
     highlightedProductId,
   );
 
@@ -128,7 +129,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         callbackPath={getDashboardHref(
           selectedSource,
           selectedSort,
-          selectedVisibility,
+          selectedView,
           highlightedProductId,
         )}
       />
@@ -150,14 +151,14 @@ export default async function Home({ searchParams }: PageProps<"/">) {
 
         <div className="mb-6 space-y-3">
           <nav
-            aria-label="Filter deals by visibility"
+            aria-label="Choose dashboard view"
             className="flex flex-wrap items-center gap-2"
           >
             <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
               View
             </span>
-            {visibilityOptions.map((option) => {
-              const isActive = option.value === selectedVisibility;
+            {viewOptions.map((option) => {
+              const isActive = option.value === selectedView;
 
               return (
                 <Link
@@ -196,7 +197,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   href={getDashboardHref(
                     filter.value,
                     selectedSort,
-                    selectedVisibility,
+                    selectedView,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -227,7 +228,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   href={getDashboardHref(
                     selectedSource,
                     option.value,
-                    selectedVisibility,
+                    selectedView,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -252,9 +253,11 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         ) : products.length === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-200 bg-white px-6 py-12 text-center">
             <p className="text-sm text-zinc-500">
-              {selectedVisibility === "hidden"
+              {selectedView === "hidden"
                 ? "No hidden products match the current filters."
-                : "No visible products match the current filters."}
+                : selectedView === "watchlist"
+                  ? "No watched products match the current filters."
+                  : "No visible products match the current filters."}
             </p>
           </div>
         ) : (
@@ -266,7 +269,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                 authCallbackPath={getDashboardHref(
                   selectedSource,
                   selectedSort,
-                  selectedVisibility,
+                  selectedView,
                   product.id,
                 )}
               />

@@ -1,5 +1,5 @@
 import type { ProductCardProduct } from "./dashboard-product.mts";
-import { includeRequestedProduct, type Visibility } from "./dashboard-products.mts";
+import { includeRequestedProduct, type DashboardView } from "./dashboard-products.mts";
 
 type DashboardSqlFragment = (
   strings: TemplateStringsArray,
@@ -33,7 +33,7 @@ export async function getLatestDashboardProducts(
   sql: DashboardSql,
   source: string | null,
   sort: DashboardSort,
-  visibility: Visibility,
+  view: DashboardView,
   highlightedProductId: string | null,
 ) {
   const rows = source
@@ -50,6 +50,7 @@ export async function getLatestDashboardProducts(
           p.discount_percent::TEXT AS "discountPercent",
           p.last_seen_at::TEXT AS "lastSeenAt",
           p.hidden,
+          p.watched,
           pf.rating AS feedback,
           CASE
             WHEN pe.product_id IS NULL THEN NULL
@@ -66,7 +67,10 @@ export async function getLatestDashboardProducts(
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
-          AND p.hidden = ${visibility === "hidden"}
+          AND (
+            (${view === "watchlist"} AND p.watched = TRUE)
+            OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
+          )
           AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
         ORDER BY
           (pe.product_id IS NULL) ASC,
@@ -92,6 +96,7 @@ export async function getLatestDashboardProducts(
           p.discount_percent::TEXT AS "discountPercent",
           p.last_seen_at::TEXT AS "lastSeenAt",
           p.hidden,
+          p.watched,
           pf.rating AS feedback,
           CASE
             WHEN pe.product_id IS NULL THEN NULL
@@ -107,7 +112,10 @@ export async function getLatestDashboardProducts(
         LEFT JOIN product_feedback pf ON pf.product_id = p.id
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
-        WHERE p.hidden = ${visibility === "hidden"}
+        WHERE (
+            (${view === "watchlist"} AND p.watched = TRUE)
+            OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
+          )
           AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
         ORDER BY
           (pe.product_id IS NULL) ASC,
@@ -143,6 +151,7 @@ export async function getLatestDashboardProducts(
       p.discount_percent::TEXT AS "discountPercent",
       p.last_seen_at::TEXT AS "lastSeenAt",
       p.hidden,
+      p.watched,
       pf.rating AS feedback,
       CASE
         WHEN pe.product_id IS NULL THEN NULL
@@ -159,6 +168,7 @@ export async function getLatestDashboardProducts(
     LEFT JOIN product_evaluations pe ON pe.product_id = p.id
     ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}
+      AND (${view !== "watchlist"} OR p.watched = TRUE)
       AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
   `;
 
