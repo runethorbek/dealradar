@@ -9,6 +9,11 @@ import {
   type DashboardView,
 } from "@/lib/dashboard-products.mts";
 import {
+  dashboardSourceFilters,
+  parseDashboardSource,
+  type DashboardSource,
+} from "@/lib/dashboard-source.mts";
+import {
   getLatestDashboardProducts,
   type DashboardSort,
   type DashboardSql,
@@ -16,15 +21,8 @@ import {
 import { ProductCard, type ProductCardProduct } from "./product-card";
 import { AppNavigation } from "./navigation";
 
-type Source = "vinted.com" | "zalando.dk" | "scarosso.com";
+type Source = DashboardSource;
 type Sort = DashboardSort;
-
-const sourceFilters: { label: string; value: Source | null }[] = [
-  { label: "All", value: null },
-  { label: "Vinted", value: "vinted.com" },
-  { label: "Zalando", value: "zalando.dk" },
-  { label: "Scarosso", value: "scarosso.com" },
-];
 
 const sortOptions: { label: string; value: Sort }[] = [
   { label: "Best match", value: "best_match" },
@@ -104,11 +102,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const requestedSort = query.sort;
   const selectedView = parseDashboardView(query.view);
   const highlightedProductId = parseProductId(query.product);
-  const selectedSource = sourceFilters.some(
-    (filter) => filter.value === requestedSource,
-  )
-    ? (requestedSource as Source)
-    : null;
+  const selectedSource = parseDashboardSource(requestedSource);
   const selectedSort = sortOptions.some(
     (option) => option.value === requestedSort,
   )
@@ -188,7 +182,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
             <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
               Source
             </span>
-            {sourceFilters.map((filter) => {
+            {dashboardSourceFilters.map((filter) => {
               const isActive = filter.value === selectedSource;
 
               return (

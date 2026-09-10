@@ -9,6 +9,7 @@ import {
 type ProductRow = {
   id: string;
   lastSeenAt: string;
+  source?: string;
   hidden?: boolean;
   watched?: boolean;
   observationCount?: number;
@@ -55,14 +56,24 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
     ? products.filter(isFresh)
     : products;
 
+  const source = query.includes("p.source =")
+    ? values.find(
+        (value): value is string =>
+          typeof value === "string" && value.includes("."),
+      )
+    : undefined;
+  const sourceFilteredProducts = source
+    ? freshProducts.filter((product) => product.source === source)
+    : freshProducts;
+
   const highlightedViewFilteredProducts = query.includes("OR p.watched = TRUE")
-    ? freshProducts.filter((product) => {
+    ? sourceFilteredProducts.filter((product) => {
         const allowAnyProduct = values.find(
           (value): value is boolean => typeof value === "boolean",
         );
         return allowAnyProduct || product.watched === true;
       })
-    : freshProducts;
+    : sourceFilteredProducts;
 
   const viewFilteredProducts = query.includes("AND p.watched = TRUE")
     ? highlightedViewFilteredProducts.filter((product) => {
@@ -111,8 +122,12 @@ function assertFreshnessQuery(query: string) {
 test("dashboard list queries return products at the inclusive cutoff and exclude stale products in SQL", async () => {
   reset();
   listProducts = [
-    { id: "fresh", lastSeenAt: cutoff.toISOString() },
-    { id: "stale", lastSeenAt: new Date(cutoff.getTime() - 1).toISOString() },
+    { id: "fresh", lastSeenAt: cutoff.toISOString(), source: "vinted.com" },
+    {
+      id: "stale",
+      lastSeenAt: new Date(cutoff.getTime() - 1).toISOString(),
+      source: "vinted.com",
+    },
   ];
 
   const allSources = await getLatestDashboardProducts(
@@ -271,4 +286,28 @@ test("the highlighted-product fallback cannot reintroduce an unwatched product i
   assert.deepEqual(result, []);
   assert.equal(queryCalls.length, 2);
   assert.match(queryCalls[1]?.query ?? "", /OR p\.watched = TRUE/);
+});
+
+test("the highlighted-product fallback respects the selected source", async () => {
+  reset();
+  highlightedProducts = [
+    {
+      id: "scarosso-product",
+      lastSeenAt: cutoff.toISOString(),
+      source: "scarosso.com",
+    },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql,
+    "vinted.com",
+    "best_match",
+    "visible",
+    "scarosso-product",
+  );
+
+  assert.deepEqual(result, []);
+  assert.equal(queryCalls.length, 2);
+  assert.match(queryCalls[1]?.query ?? "", /p\.source = \$parameter/);
+  assert.ok(queryCalls[1]?.values.includes("vinted.com"));
 });

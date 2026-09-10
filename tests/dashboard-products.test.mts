@@ -5,6 +5,10 @@ import {
   parseDashboardView,
   parseProductId,
 } from "../lib/dashboard-products.mts";
+import {
+  dashboardSourceFilters,
+  parseDashboardSource,
+} from "../lib/dashboard-source.mts";
 
 test("parseDashboardView defaults to Visible and accepts Hidden and Watchlist", () => {
   assert.equal(parseDashboardView(undefined), "visible");
@@ -12,6 +16,24 @@ test("parseDashboardView defaults to Visible and accepts Hidden and Watchlist", 
   assert.equal(parseDashboardView("hidden"), "hidden");
   assert.equal(parseDashboardView("watchlist"), "watchlist");
   assert.equal(parseDashboardView("unexpected"), "visible");
+});
+
+test("dashboard source filters include only All, Vinted, and Zalando", () => {
+  assert.deepEqual(dashboardSourceFilters, [
+    { label: "All", value: null },
+    { label: "Vinted", value: "vinted.com" },
+    { label: "Zalando", value: "zalando.dk" },
+  ]);
+});
+
+test("parseDashboardSource accepts Vinted and Zalando", () => {
+  assert.equal(parseDashboardSource("vinted.com"), "vinted.com");
+  assert.equal(parseDashboardSource("zalando.dk"), "zalando.dk");
+});
+
+test("parseDashboardSource defaults unsupported sources to All", () => {
+  assert.equal(parseDashboardSource("scarosso.com"), null);
+  assert.equal(parseDashboardSource("unsupported.example"), null);
 });
 
 test("parseProductId accepts positive PostgreSQL BIGINT product IDs", () => {

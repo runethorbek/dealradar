@@ -168,6 +168,7 @@ export async function getLatestDashboardProducts(
     LEFT JOIN product_evaluations pe ON pe.product_id = p.id
     ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}
+      AND (${source} IS NULL OR p.source = ${source})
       AND (${view !== "watchlist"} OR p.watched = TRUE)
       AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
   `;
