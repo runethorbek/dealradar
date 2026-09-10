@@ -174,10 +174,8 @@ Important fields include:
 * current price
 * original price
 * discount percentage
-* target size
 * availability
 * brand
-* category
 * first seen
 * last seen
 * complete original source object in `raw_data`

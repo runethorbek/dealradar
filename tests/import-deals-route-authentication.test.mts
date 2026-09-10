@@ -10,6 +10,7 @@ let neonCalls = 0;
 let persistenceCalls = 0;
 let evaluationCalls = 0;
 let slackCalls = 0;
+let persistedQueries: Array<{ text: string; values: unknown[] }> = [];
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -22,14 +23,21 @@ function mockModule(specifier: string, exports: Record<string, unknown>) {
 mockModule("@neondatabase/serverless", {
   neon: () => {
     neonCalls += 1;
+    const sql = (
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => {
+      persistedQueries.push({ text: strings.join(" "), values });
+      return undefined;
+    };
 
     return Object.assign(
-      () => undefined,
+      sql,
       {
         transaction: async (queries: unknown[]) => {
           persistenceCalls += 1;
-          assert.equal(queries.length, 1);
-          return [[{
+          assert.equal(queries.length, 3);
+          return queries.map(() => [{
             productId: "42",
             title: "Test shoe",
             currentPrice: "1200",
@@ -42,7 +50,7 @@ mockModule("@neondatabase/serverless", {
             priceChanged: false,
             priceDropPercent: null,
             discountPercent: "20",
-          }]];
+          }]);
         },
       },
     );
@@ -82,6 +90,7 @@ function reset() {
   persistenceCalls = 0;
   evaluationCalls = 0;
   slackCalls = 0;
+  persistedQueries = [];
 }
 
 function importRequest(authorization?: string) {
@@ -128,20 +137,21 @@ test("preserves the import flow for a valid bearer credential", async () => {
   globalThis.fetch = async () => {
     feedFetchCalls += 1;
 
-    const products = feedFetchCalls === 1
-      ? [{
-          url: "https://example.com/test-shoe",
-          title: "Test shoe",
-          current_price: 1200,
-          currency: "DKK",
-          checked_at: "2026-08-30T12:00:00.000Z",
-        }]
-      : [];
+    const sourceProduct = {
+      url: `https://example.com/test-shoe-${feedFetchCalls}`,
+      title: "Test shoe",
+      currency: "DKK",
+      target_size: "42",
+      category: "source-specific-category",
+      brand: "Test brand",
+      checked_at: "2026-08-30T12:00:00.000Z",
+      ...(feedFetchCalls === 3 ? { price: 120 } : { current_price: 1200 }),
+    };
 
     return Response.json({
       site: "example.com",
       checked_at: "2026-08-30T12:00:00.000Z",
-      products,
+      products: [sourceProduct],
     });
   };
 
@@ -153,14 +163,32 @@ test("preserves the import flow for a valid bearer credential", async () => {
   assert.equal(persistenceCalls, 1);
   assert.equal(evaluationCalls, 1);
   assert.equal(slackCalls, 1);
+  assert.equal(persistedQueries.length, 3);
+
+  for (const query of persistedQueries) {
+    assert.doesNotMatch(query.text, /target_size|category/i);
+    assert.match(query.text, /brand/i);
+
+    const rawData = query.values.find(
+      (value) =>
+        typeof value === "string" &&
+        value.includes("source-specific-category"),
+    );
+    assert.deepEqual(JSON.parse(rawData as string).target_size, "42");
+    assert.deepEqual(
+      JSON.parse(rawData as string).category,
+      "source-specific-category",
+    );
+  }
+
   assert.deepEqual(await response.json(), {
     success: true,
     ref: "abc123",
     sources: 3,
-    productsProcessed: 1,
-    productsInserted: 1,
+    productsProcessed: 3,
+    productsInserted: 3,
     productsUpdated: 0,
-    snapshotsInserted: 1,
+    snapshotsInserted: 3,
     productsEvaluated: 1,
   });
 });

@@ -95,7 +95,7 @@ Preference score should consider characteristics such as:
 - material
 - color
 - brand where relevant
-- category
+- product type when it can be established reliably from the supplied product data
 - details learned from Like / Not for me feedback
 
 Preference score should not primarily reflect whether the current price is

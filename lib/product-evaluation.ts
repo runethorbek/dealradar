@@ -110,10 +110,8 @@ export async function evaluateProduct({
           original_price::TEXT AS "originalPrice",
           currency,
           discount_percent::TEXT AS "discountPercent",
-          target_size AS "targetSize",
           available,
           brand,
-          category,
           first_seen_at::TEXT AS "firstSeenAt",
           last_seen_at::TEXT AS "lastSeenAt"
         FROM products
@@ -129,9 +127,7 @@ export async function evaluateProduct({
           pf.rating,
           p.title,
           p.source,
-          p.brand,
-          p.category,
-          p.target_size AS "targetSize"
+          p.brand
         FROM product_feedback pf
         JOIN products p ON p.id = pf.product_id
         ORDER BY pf.created_at DESC

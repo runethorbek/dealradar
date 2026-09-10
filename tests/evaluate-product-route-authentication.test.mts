@@ -12,6 +12,7 @@ let neonCalls = 0;
 let persistenceCalls = 0;
 let geminiClientCalls = 0;
 let geminiRequestCalls = 0;
+let geminiContents = "";
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -60,8 +61,9 @@ mockModule("@neondatabase/serverless", {
 mockModule("@google/genai", {
   GoogleGenAI: class {
     models = {
-      generateContent: async () => {
+      generateContent: async ({ contents }: { contents: string }) => {
         geminiRequestCalls += 1;
+        geminiContents = contents;
         return {
           text: JSON.stringify({
             preferenceScore: 8,
@@ -98,6 +100,7 @@ function reset(nextSession: typeof session) {
   persistenceCalls = 0;
   geminiClientCalls = 0;
   geminiRequestCalls = 0;
+  geminiContents = "";
 }
 
 function evaluationRequest(body = JSON.stringify({ productId: "42" })) {
@@ -147,6 +150,7 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
   assert.equal(persistenceCalls, 5);
   assert.equal(geminiClientCalls, 1);
   assert.equal(geminiRequestCalls, 1);
+  assert.doesNotMatch(geminiContents, /targetSize|target_size|category/i);
   assert.deepEqual(await response.json(), {
     success: true,
     evaluation: {

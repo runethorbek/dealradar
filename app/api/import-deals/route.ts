@@ -32,10 +32,8 @@ type NormalizedProduct = {
   sourceOriginalPrice: number | null;
   sourceCurrency: string | null;
   discountPercent: number | null;
-  targetSize: string | null;
   available: boolean | null;
   brand: string | null;
-  category: string | null;
   observedAt: string;
   rawData: JsonObject;
 };
@@ -158,7 +156,7 @@ function normalizeProducts(
       return [];
     }
 
-    const targetSize =
+    const availabilitySize =
       definition.priceField === "price"
         ? optionalString(product.size_guess) ??
           optionalString(payload.target_size_id)
@@ -166,19 +164,14 @@ function normalizeProducts(
 
     let available = optionalBoolean(product.available);
 
-    if (available === null && targetSize) {
-      available = optionalBoolean(product[`size_${targetSize}_available`]);
+    if (available === null && availabilitySize) {
+      available = optionalBoolean(product[`size_${availabilitySize}_available`]);
     }
 
     if (available === null && definition.priceField === "price") {
       available = true;
     }
 
-    const categories = Array.isArray(product.categories)
-      ? product.categories
-      : [];
-    const category =
-      optionalString(product.category) ?? optionalString(categories[0]);
     const prices =
       definition.name === "Scarosso"
         ? normalizeScarossoPrices(
@@ -210,10 +203,8 @@ function normalizeProducts(
       sourceOriginalPrice: prices.sourceOriginalPrice,
       sourceCurrency: prices.sourceCurrency,
       discountPercent: optionalNumber(product.discount_percent),
-      targetSize,
       available,
       brand: optionalString(product.brand),
-      category,
       observedAt: validTimestamp(product.checked_at, payload.checked_at),
       rawData: product,
     }];
@@ -364,10 +355,8 @@ export async function POST(request: Request) {
           source_original_price,
           source_currency,
           discount_percent,
-          target_size,
           available,
           brand,
-          category,
           first_seen_at,
           last_seen_at,
           raw_data
@@ -383,10 +372,8 @@ export async function POST(request: Request) {
           ${product.sourceOriginalPrice},
           ${product.sourceCurrency},
           ${product.discountPercent},
-          ${product.targetSize},
           ${product.available},
           ${product.brand},
-          ${product.category},
           ${product.observedAt},
           ${product.observedAt},
           ${JSON.stringify(product.rawData)}::JSONB
@@ -401,10 +388,8 @@ export async function POST(request: Request) {
           source_original_price = EXCLUDED.source_original_price,
           source_currency = EXCLUDED.source_currency,
           discount_percent = EXCLUDED.discount_percent,
-          target_size = EXCLUDED.target_size,
           available = EXCLUDED.available,
           brand = EXCLUDED.brand,
-          category = EXCLUDED.category,
           last_seen_at = EXCLUDED.last_seen_at,
           raw_data = EXCLUDED.raw_data
         RETURNING

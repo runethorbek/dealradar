@@ -118,7 +118,7 @@ Verified with deterministic tests covering both evaluation calls, visibility pre
 - Optimistic client-side collection management.
 - New database, route, React, or mocking test infrastructure.
 - Changing the meaning or learning behavior of Like or Not for me.
-- Automatically hiding products based on score, price, retailer, category, or age.
+- Automatically hiding products based on score, price, retailer, product type, or age.
 - Deleting products, price history, evaluations, or feedback.
 - Changing existing import, snapshot, evaluation-eligibility, scoring, or sorting behavior for hidden products.
 - Changing scraper behavior or the external import contract.
