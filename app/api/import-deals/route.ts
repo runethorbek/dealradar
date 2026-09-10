@@ -10,10 +10,6 @@ import {
   parsePartialScanWarning,
   selectTopRecommendation,
 } from "@/lib/import-notification.mts";
-import {
-  normalizeScarossoPrices,
-  parseUsdToDkkRate,
-} from "@/lib/price-normalization.mts";
 import { postSlackMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -45,16 +41,7 @@ type ImportResult = ImportEvaluationResult & {
 class SourceDataError extends Error {}
 
 const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
-const usdToDkkRateUrl =
-  "https://api.frankfurter.dev/v2/rate/USD/DKK?providers=DNB";
-
 const sources = [
-  {
-    name: "Scarosso",
-    fallbackSource: "scarosso.com",
-    fileName: "scarosso-latest.json",
-    priceField: "current_price",
-  },
   {
     name: "Zalando",
     fallbackSource: "zalando.dk",
@@ -123,7 +110,6 @@ function validTimestamp(...values: unknown[]) {
 function normalizeProducts(
   payloadValue: unknown,
   definition: (typeof sources)[number],
-  usdToDkkRate: number | null,
 ) {
   const payload = asObject(payloadValue, `${definition.name} feed`);
 
@@ -172,24 +158,14 @@ function normalizeProducts(
       available = true;
     }
 
-    const prices =
-      definition.name === "Scarosso"
-        ? normalizeScarossoPrices(
-            {
-              currentPrice: sourceCurrentPrice,
-              originalPrice: sourceOriginalPrice,
-              currency: sourceCurrency,
-            },
-            usdToDkkRate,
-          )
-        : {
-            currentPrice: sourceCurrentPrice,
-            originalPrice: sourceOriginalPrice,
-            currency: sourceCurrency,
-            sourceCurrentPrice: null,
-            sourceOriginalPrice: null,
-            sourceCurrency: null,
-          };
+    const prices = {
+      currentPrice: sourceCurrentPrice,
+      originalPrice: sourceOriginalPrice,
+      currency: sourceCurrency,
+      sourceCurrentPrice: null,
+      sourceOriginalPrice: null,
+      sourceCurrency: null,
+    };
 
     return [{
       source,
@@ -225,47 +201,6 @@ async function fetchSourcePayload(
   }
 
   return response.json() as Promise<unknown>;
-}
-
-function sourceContainsCurrency(payloadValue: unknown, currency: string) {
-  if (
-    typeof payloadValue !== "object" ||
-    payloadValue === null ||
-    Array.isArray(payloadValue)
-  ) {
-    return false;
-  }
-
-  const products = (payloadValue as JsonObject).products;
-
-  return (
-    Array.isArray(products) &&
-    products.some(
-      (product) =>
-        typeof product === "object" &&
-        product !== null &&
-        !Array.isArray(product) &&
-        optionalString((product as JsonObject).currency)?.toUpperCase() ===
-          currency,
-    )
-  );
-}
-
-async function fetchUsdToDkkRate() {
-  try {
-    const response = await fetch(usdToDkkRateUrl, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return parseUsdToDkkRate(await response.json());
-  } catch {
-    return null;
-  }
 }
 
 export async function POST(request: Request) {
@@ -315,22 +250,8 @@ export async function POST(request: Request) {
       const warning = parsePartialScanWarning(sources[index].name, payload);
       return warning ? [warning] : [];
     });
-    const scarossoNeedsUsdRate = sourceContainsCurrency(
-      sourcePayloads[0],
-      "USD",
-    );
-    const usdToDkkRate = scarossoNeedsUsdRate
-      ? await fetchUsdToDkkRate()
-      : null;
-
-    if (scarossoNeedsUsdRate && usdToDkkRate === null) {
-      console.warn(
-        "DealRadar USD to DKK rate lookup failed; source prices were preserved.",
-      );
-    }
-
     const productsBySource = sourcePayloads.map((payload, index) =>
-      normalizeProducts(payload, sources[index], usdToDkkRate),
+      normalizeProducts(payload, sources[index]),
     );
     const products = productsBySource.flat();
     const sql = neon(databaseUrl);

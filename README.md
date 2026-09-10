@@ -1,6 +1,6 @@
 # DealRadar
 
-DealRadar is a personal deal-tracking application for products from sources such as Vinted, Zalando, and Scarosso.
+DealRadar is a personal deal-tracking application for products from Vinted and Zalando.
 
 The system is split into two GitHub repositories:
 
@@ -39,7 +39,6 @@ runethorbek/deals
 
 The scrapers currently collect deals from:
 
-* Scarosso
 * Zalando
 * Vinted
 
@@ -54,7 +53,6 @@ public/deals/
 Current files include:
 
 ```text
-scarosso-latest.json
 zalando-latest.json
 vinted-latest.json
 ```
@@ -66,7 +64,6 @@ Each JSON file contains information such as product URL, title, image, price, di
 The `deals` repository contains scheduled GitHub Actions:
 
 ```text
-.github/workflows/daily-scarosso.yml
 .github/workflows/daily-zalando.yml
 .github/workflows/daily-vinted.yml
 ```
@@ -137,7 +134,7 @@ POST /api/import-deals?ref=<git-sha>
 
 If no ref is supplied, `main` is used.
 
-The importer fetches the three JSON files from the `deals` repository at the specified Git commit.
+The importer fetches the Zalando and Vinted JSON files from the `deals` repository at the specified Git commit.
 
 It then:
 
@@ -557,7 +554,6 @@ There is normally no reason to involve GitHub Actions for simple feedback.
 A Slack action could later trigger a GitHub Action for operations such as:
 
 ```text
-Rescan Scarosso now
 Rescan Zalando now
 Rescan Vinted now
 ```

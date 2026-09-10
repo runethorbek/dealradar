@@ -10,7 +10,6 @@ This document must not redefine those meanings.
 DealRadar imports:
 
 ```text
-public/deals/scarosso-latest.json
 public/deals/zalando-latest.json
 public/deals/vinted-latest.json
 ```
@@ -26,7 +25,6 @@ DealRadar maps the source-specific producer fields as follows:
 | Producer source | Current-price field |
 | --- | --- |
 | Vinted | `price` |
-| Scarosso | `current_price` |
 | Zalando | `current_price` |
 
 For every source, `url` becomes the external product identity and `title`
@@ -36,8 +34,7 @@ remain in the complete original product object stored as `raw_data`; they are
 not normalized product fields.
 
 For availability mapping only, Vinted uses `size_guess` and falls back to the
-snapshot `target_size_id`; Scarosso uses product `target_size` and falls back
-to snapshot `target_size`; Zalando uses product `target_size` and falls back to
+snapshot `target_size_id`; Zalando uses product `target_size` and falls back to
 the snapshot value. This source-specific size information is not persisted as
 a product field. If no source-specific availability field is present, Vinted's
 listing filter currently permits DealRadar to treat the product as available.
@@ -47,11 +44,9 @@ future migrations. This is not a substitute for normalized application fields.
 
 ## Application normalization and persistence
 
-DealRadar owns application-wide currency normalization. In particular, it may
-convert Scarosso source prices to normalized DKK while preserving the source
-current price, original price, and currency alongside normalized values.
-Normalization must not infer currency from price magnitude or silently guess
-when source markers conflict.
+DealRadar owns application-wide currency normalization. Normalization must not
+infer currency from price magnitude or silently guess when source markers
+conflict.
 
 Products are persisted by `(source, external_url)`. URL normalization changes
 can create duplicate products and require compatibility review. Historical

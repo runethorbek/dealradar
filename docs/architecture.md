@@ -55,7 +55,7 @@ Source-specific problems should normally be fixed here.
 Examples:
 
 - Zalando Danish price parsing;
-- Scarosso product/image association;
+- a retired source's product/image association;
 - Vinted source fields;
 - a retailer page failing during a scan.
 
@@ -78,7 +78,7 @@ The `dealradar` repository owns:
 
 Examples:
 
-- converting Scarosso USD prices to normalized DKK;
+- converting source prices to normalized DKK when an active feed requires it;
 - deciding when a product should be evaluated;
 - ranking products by Preference and Deal scores;
 - displaying a partial-scan warning in Slack.
@@ -125,7 +125,7 @@ DealRadar distinguishes between:
 For example:
 
 ```text
-Scarosso source price:
+Source price:
 190 USD
 
 DealRadar normalized price:

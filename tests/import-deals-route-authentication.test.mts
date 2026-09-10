@@ -36,7 +36,6 @@ mockModule("@neondatabase/serverless", {
       {
         transaction: async (queries: unknown[]) => {
           persistenceCalls += 1;
-          assert.equal(queries.length, 3);
           return queries.map(() => [{
             productId: "42",
             title: "Test shoe",
@@ -134,8 +133,11 @@ test("rejects missing and invalid bearer credentials before import side effects"
 
 test("preserves the import flow for a valid bearer credential", async () => {
   reset();
-  globalThis.fetch = async () => {
+  const requestedFeedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
     feedFetchCalls += 1;
+    const url = String(input);
+    requestedFeedUrls.push(url);
 
     const sourceProduct = {
       url: `https://example.com/test-shoe-${feedFetchCalls}`,
@@ -145,7 +147,9 @@ test("preserves the import flow for a valid bearer credential", async () => {
       category: "source-specific-category",
       brand: "Test brand",
       checked_at: "2026-08-30T12:00:00.000Z",
-      ...(feedFetchCalls === 3 ? { price: 120 } : { current_price: 1200 }),
+      ...(url.includes("vinted-latest.json")
+        ? { price: 120 }
+        : { current_price: 1200 }),
     };
 
     return Response.json({
@@ -158,12 +162,16 @@ test("preserves the import flow for a valid bearer credential", async () => {
   const response = await POST(importRequest("Bearer valid-ingest-key"));
 
   assert.equal(response.status, 200);
-  assert.equal(feedFetchCalls, 3);
+  assert.equal(feedFetchCalls, 2);
+  assert.deepEqual(requestedFeedUrls.sort(), [
+    "https://raw.githubusercontent.com/runethorbek/deals/abc123/public/deals/vinted-latest.json",
+    "https://raw.githubusercontent.com/runethorbek/deals/abc123/public/deals/zalando-latest.json",
+  ]);
   assert.equal(neonCalls, 1);
   assert.equal(persistenceCalls, 1);
   assert.equal(evaluationCalls, 1);
   assert.equal(slackCalls, 1);
-  assert.equal(persistedQueries.length, 3);
+  assert.equal(persistedQueries.length, 2);
 
   for (const query of persistedQueries) {
     assert.doesNotMatch(query.text, /target_size|category/i);
@@ -184,11 +192,37 @@ test("preserves the import flow for a valid bearer credential", async () => {
   assert.deepEqual(await response.json(), {
     success: true,
     ref: "abc123",
-    sources: 3,
-    productsProcessed: 3,
-    productsInserted: 3,
+    sources: 2,
+    productsProcessed: 2,
+    productsInserted: 2,
     productsUpdated: 0,
-    snapshotsInserted: 3,
+    snapshotsInserted: 2,
     productsEvaluated: 1,
   });
+});
+
+test("fails when a required active feed is unavailable", async (t) => {
+  for (const fileName of ["zalando-latest.json", "vinted-latest.json"]) {
+    await t.test(fileName, async () => {
+      reset();
+      globalThis.fetch = async (input) => {
+        feedFetchCalls += 1;
+        return String(input).includes(fileName)
+          ? new Response(null, { status: 404 })
+          : Response.json({ products: [] });
+      };
+
+      const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), {
+        success: false,
+        ref: "abc123",
+        error: `${fileName === "zalando-latest.json" ? "Zalando" : "Vinted"} feed returned HTTP 404.`,
+      });
+      assert.equal(neonCalls, 0);
+      assert.equal(persistenceCalls, 0);
+      assert.equal(slackCalls, 0);
+    });
+  }
 });
