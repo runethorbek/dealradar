@@ -9,6 +9,21 @@ import {
   dashboardSourceFilters,
   parseDashboardSource,
 } from "../lib/dashboard-source.mts";
+import {
+  dashboardFreshnessOptions,
+  parseDashboardFreshness,
+} from "../lib/dashboard-freshness.mts";
+
+test("dashboard freshness defaults to Last 24 hours and accepts both supported windows", () => {
+  assert.equal(parseDashboardFreshness(undefined), "24h");
+  assert.equal(parseDashboardFreshness("24h"), "24h");
+  assert.equal(parseDashboardFreshness("7d"), "7d");
+  assert.equal(parseDashboardFreshness("unexpected"), "24h");
+  assert.deepEqual(dashboardFreshnessOptions, [
+    { label: "Last 24 hours", value: "24h", hours: 24 },
+    { label: "Last 7 days", value: "7d", hours: 168 },
+  ]);
+});
 
 test("parseDashboardView defaults to Visible and accepts Hidden and Watchlist", () => {
   assert.equal(parseDashboardView(undefined), "visible");

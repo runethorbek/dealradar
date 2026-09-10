@@ -18,6 +18,11 @@ import {
   type DashboardSort,
   type DashboardSql,
 } from "@/lib/dashboard-product-query.mts";
+import {
+  dashboardFreshnessOptions,
+  parseDashboardFreshness,
+  type DashboardFreshness,
+} from "@/lib/dashboard-freshness.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 import { AppNavigation } from "./navigation";
 
@@ -40,6 +45,7 @@ function getDashboardHref(
   source: Source | null,
   sort: Sort,
   view: DashboardView,
+  freshness: DashboardFreshness,
   highlightedProductId?: string | null,
 ) {
   const params = new URLSearchParams();
@@ -56,6 +62,10 @@ function getDashboardHref(
     params.set("view", view);
   }
 
+  if (freshness !== "24h") {
+    params.set("freshness", freshness);
+  }
+
   if (highlightedProductId) {
     params.set("product", highlightedProductId);
   }
@@ -68,6 +78,7 @@ async function getLatestProducts(
   source: Source | null,
   sort: Sort,
   view: DashboardView,
+  freshness: DashboardFreshness,
   highlightedProductId: string | null,
 ) {
   await connection();
@@ -86,6 +97,7 @@ async function getLatestProducts(
         source,
         sort,
         view,
+        freshness,
         highlightedProductId,
       ),
       failed: false,
@@ -101,6 +113,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const requestedSource = query.source;
   const requestedSort = query.sort;
   const selectedView = parseDashboardView(query.view);
+  const selectedFreshness = parseDashboardFreshness(query.freshness);
   const highlightedProductId = parseProductId(query.product);
   const selectedSource = parseDashboardSource(requestedSource);
   const selectedSort = sortOptions.some(
@@ -112,6 +125,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
     selectedSource,
     selectedSort,
     selectedView,
+    selectedFreshness,
     highlightedProductId,
   );
 
@@ -124,6 +138,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           selectedSource,
           selectedSort,
           selectedView,
+          selectedFreshness,
           highlightedProductId,
         )}
       />
@@ -161,6 +176,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     selectedSource,
                     selectedSort,
                     option.value,
+                    selectedFreshness,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -192,6 +208,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     filter.value,
                     selectedSort,
                     selectedView,
+                    selectedFreshness,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -201,6 +218,38 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   }`}
                 >
                   {filter.label}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <nav
+            aria-label="Filter deals by freshness"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
+              Freshness
+            </span>
+            {dashboardFreshnessOptions.map((option) => {
+              const isActive = option.value === selectedFreshness;
+
+              return (
+                <Link
+                  key={option.value}
+                  href={getDashboardHref(
+                    selectedSource,
+                    selectedSort,
+                    selectedView,
+                    option.value,
+                  )}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+                    isActive
+                      ? "border-zinc-950 bg-zinc-950 text-white"
+                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
+                  }`}
+                >
+                  {option.label}
                 </Link>
               );
             })}
@@ -223,6 +272,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     selectedSource,
                     option.value,
                     selectedView,
+                    selectedFreshness,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -264,6 +314,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   selectedSource,
                   selectedSort,
                   selectedView,
+                  selectedFreshness,
                   product.id,
                 )}
               />

@@ -45,7 +45,7 @@ const product: ProductCardProduct = {
   feedback: null,
   evaluation: null,
 };
-const authCallbackPath = "/?source=zalando.dk&sort=newest&view=hidden&product=42";
+const authCallbackPath = "/?source=zalando.dk&sort=newest&view=hidden&freshness=7d&product=42";
 const originalFetch = globalThis.fetch;
 let root: Root | undefined;
 
@@ -179,7 +179,7 @@ test("an unauthenticated Like attempt offers sign-in with the preserved dashboar
   assert.equal(signIn.textContent, "Sign in");
   assert.equal(
     signIn.getAttribute("href"),
-    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26freshness%3D7d%26product%3D42",
   );
   assert.match(container.textContent ?? "", /to save feedback\./);
   assert.doesNotMatch(
@@ -237,7 +237,7 @@ test("an unauthenticated Hide attempt offers sign-in with the preserved dashboar
   assert.equal(signIn.textContent, "Sign in");
   assert.equal(
     signIn.getAttribute("href"),
-    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26freshness%3D7d%26product%3D42",
   );
   assert.match(container.textContent ?? "", /to update visibility\./);
   assert.doesNotMatch(
@@ -340,7 +340,7 @@ test("an unauthenticated Watch attempt offers sign-in with the dashboard callbac
   assert.ok(signIn);
   assert.equal(
     signIn.getAttribute("href"),
-    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26freshness%3D7d%26product%3D42",
   );
   assert.match(container.textContent ?? "", /to update Watch\./);
 });
@@ -418,7 +418,7 @@ test("an unauthenticated Evaluate attempt offers sign-in with the preserved dash
   assert.equal(signIn.textContent, "Sign in");
   assert.equal(
     signIn.getAttribute("href"),
-    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26product%3D42",
+    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26freshness%3D7d%26product%3D42",
   );
   assert.match(container.textContent ?? "", /to evaluate this product\./);
   assert.doesNotMatch(

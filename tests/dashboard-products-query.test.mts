@@ -35,8 +35,11 @@ let highlightedProducts: ProductRow[] = [];
 let snapshots: SnapshotRow[] = [];
 let queryCalls: QueryCall[] = [];
 
-function isFresh(product: ProductRow) {
-  return new Date(product.lastSeenAt).getTime() >= cutoff.getTime();
+function isFresh(product: ProductRow, freshnessHours: number) {
+  const freshnessCutoff = new Date(
+    cutoff.getTime() - (freshnessHours - 24) * 60 * 60 * 1000,
+  );
+  return new Date(product.lastSeenAt).getTime() >= freshnessCutoff.getTime();
 }
 
 async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
@@ -52,10 +55,11 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
 
   queryCalls.push({ query, values, products });
 
-  const freshProducts = query.includes(
-    "p.last_seen_at >= NOW() - INTERVAL '24 hours'",
-  )
-    ? products.filter(isFresh)
+  const freshnessHours = values.find(
+    (value): value is number => value === 24 || value === 168,
+  );
+  const freshProducts = query.includes("* INTERVAL '1 hour'") && freshnessHours
+    ? products.filter((product) => isFresh(product, freshnessHours))
     : products;
 
   const source = query.includes("p.source =")
@@ -118,11 +122,12 @@ function reset() {
   queryCalls = [];
 }
 
-function assertFreshnessQuery(query: string) {
+function assertFreshnessQuery(query: string, values: unknown[], hours: 24 | 168) {
   assert.match(
     query,
-    /p\.last_seen_at >= NOW\(\) - INTERVAL '24 hours'/,
+    /p\.last_seen_at >= NOW\(\) - \$parameter \* INTERVAL '1 hour'/,
   );
+  assert.ok(values.includes(hours));
 }
 
 test("dashboard list queries return products at the inclusive cutoff and exclude stale products in SQL", async () => {
@@ -141,6 +146,7 @@ test("dashboard list queries return products at the inclusive cutoff and exclude
     null,
     "best_match",
     "visible",
+    "24h",
     null,
   );
   const sourceFiltered = await getLatestDashboardProducts(
@@ -148,13 +154,44 @@ test("dashboard list queries return products at the inclusive cutoff and exclude
     "vinted.com",
     "best_match",
     "visible",
+    "24h",
     null,
   );
 
   assert.deepEqual(allSources.map((product) => product.id), ["fresh"]);
   assert.deepEqual(sourceFiltered.map((product) => product.id), ["fresh"]);
   assert.equal(queryCalls.length, 2);
-  for (const call of queryCalls) assertFreshnessQuery(call.query);
+  for (const call of queryCalls) assertFreshnessQuery(call.query, call.values, 24);
+});
+
+test("dashboard freshness windows include only products inside their rolling SQL cutoffs", async () => {
+  reset();
+  listProducts = [
+    { id: "inside-24-hours", lastSeenAt: cutoff.toISOString() },
+    {
+      id: "between-24-hours-and-7-days",
+      lastSeenAt: new Date(cutoff.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      id: "older-than-7-days",
+      lastSeenAt: new Date(cutoff.getTime() - 7 * 24 * 60 * 60 * 1000 - 1).toISOString(),
+    },
+  ];
+
+  const last24Hours = await getLatestDashboardProducts(
+    sql, null, "best_match", "visible", "24h", null,
+  );
+  const last7Days = await getLatestDashboardProducts(
+    sql, null, "best_match", "visible", "7d", null,
+  );
+
+  assert.deepEqual(last24Hours.map((product) => product.id), ["inside-24-hours"]);
+  assert.deepEqual(last7Days.map((product) => product.id), [
+    "inside-24-hours",
+    "between-24-hours-and-7-days",
+  ]);
+  assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
+  assertFreshnessQuery(queryCalls[1]!.query, queryCalls[1]!.values, 168);
 });
 
 test("dashboard queries include SQL snapshot aggregates for count and minimum price", () => {
@@ -206,6 +243,7 @@ test("dashboard query aggregates repeated valid prices and ignores null and nega
     null,
     "best_match",
     "visible",
+    "24h",
     null,
   );
 
@@ -241,6 +279,7 @@ test("dashboard query compares only historical prices with the product's explici
         null,
         "best_match",
         "visible",
+        "24h",
         null,
       );
 
@@ -278,6 +317,7 @@ test("Watchlist returns watched products only and includes persisted Watch state
     null,
     "best_match",
     "watchlist",
+    "24h",
     null,
   );
 
@@ -292,10 +332,13 @@ test("Watchlist returns watched products only and includes persisted Watch state
   assert.match(queryCalls[0]?.query ?? "", /p\.watched,/);
 });
 
-test("the highlighted-product fallback cannot reintroduce a stale product", async () => {
+test("the highlighted-product fallback cannot reintroduce a product outside the selected window", async () => {
   reset();
   highlightedProducts = [
-    { id: "stale", lastSeenAt: new Date(cutoff.getTime() - 1).toISOString() },
+    {
+      id: "stale",
+      lastSeenAt: new Date(cutoff.getTime() - 6 * 24 * 60 * 60 * 1000 - 1).toISOString(),
+    },
   ];
 
   const result = await getLatestDashboardProducts(
@@ -303,12 +346,13 @@ test("the highlighted-product fallback cannot reintroduce a stale product", asyn
     null,
     "best_match",
     "visible",
+    "7d",
     "stale",
   );
 
   assert.deepEqual(result, []);
   assert.equal(queryCalls.length, 2);
-  for (const call of queryCalls) assertFreshnessQuery(call.query);
+  for (const call of queryCalls) assertFreshnessQuery(call.query, call.values, 168);
 });
 
 test("the highlighted-product fallback cannot reintroduce an unwatched product into Watchlist", async () => {
@@ -326,6 +370,7 @@ test("the highlighted-product fallback cannot reintroduce an unwatched product i
     null,
     "best_match",
     "watchlist",
+    "24h",
     "not-watched",
   );
 
@@ -349,6 +394,7 @@ test("the highlighted-product fallback respects the selected source", async () =
     "vinted.com",
     "best_match",
     "visible",
+    "24h",
     "scarosso-product",
   );
 

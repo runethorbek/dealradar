@@ -1,4 +1,8 @@
 import type { ProductCardProduct } from "./dashboard-product.mts";
+import {
+  dashboardFreshnessHours,
+  type DashboardFreshness,
+} from "./dashboard-freshness.mts";
 import { includeRequestedProduct, type DashboardView } from "./dashboard-products.mts";
 
 type DashboardSqlFragment = (
@@ -36,8 +40,10 @@ export async function getLatestDashboardProducts(
   source: string | null,
   sort: DashboardSort,
   view: DashboardView,
+  freshness: DashboardFreshness,
   highlightedProductId: string | null,
 ) {
+  const freshnessHours = dashboardFreshnessHours(freshness);
   const rows = source
     ? await sql`
         SELECT
@@ -73,7 +79,7 @@ export async function getLatestDashboardProducts(
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
           )
-          AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
+          AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
           (pe.product_id IS NULL) ASC,
           CASE
@@ -118,7 +124,7 @@ export async function getLatestDashboardProducts(
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
           )
-          AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
+          AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
           (pe.product_id IS NULL) ASC,
           CASE
@@ -172,7 +178,7 @@ export async function getLatestDashboardProducts(
     WHERE p.id = ${highlightedProductId}
       AND (${source} IS NULL OR p.source = ${source})
       AND (${view !== "watchlist"} OR p.watched = TRUE)
-      AND p.last_seen_at >= NOW() - INTERVAL '24 hours'
+      AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
   `;
 
   return includeRequestedProduct(
