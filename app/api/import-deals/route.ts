@@ -258,7 +258,12 @@ export async function POST(request: Request) {
 
     const queries = products.map((product) => sql`
       WITH existing AS MATERIALIZED (
-        SELECT id, current_price, source_current_price
+        SELECT
+          id,
+          current_price,
+          currency,
+          source_current_price,
+          source_currency
         FROM products
         WHERE source = ${product.source}
           AND external_url = ${product.externalUrl}
@@ -329,6 +334,7 @@ export async function POST(request: Request) {
           observed_at,
           current_price,
           original_price,
+          currency,
           source_current_price,
           source_original_price,
           source_currency,
@@ -340,6 +346,7 @@ export async function POST(request: Request) {
           ${product.observedAt},
           ${product.currentPrice},
           ${product.originalPrice},
+          ${product.currency},
           ${product.sourceCurrentPrice},
           ${product.sourceOriginalPrice},
           ${product.sourceCurrency},
@@ -366,16 +373,25 @@ export async function POST(request: Request) {
           AND CASE
             WHEN upserted.source_current_price IS NOT NULL
             THEN existing.source_current_price IS NOT NULL
+              AND existing.source_currency IS NOT NULL
+              AND upserted.source_currency IS NOT NULL
+              AND existing.source_currency = upserted.source_currency
               AND existing.source_current_price
                 IS DISTINCT FROM upserted.source_current_price
             ELSE existing.current_price IS NOT NULL
               AND upserted.current_price IS NOT NULL
+              AND existing.currency IS NOT NULL
+              AND upserted.currency IS NOT NULL
+              AND existing.currency = upserted.currency
               AND existing.current_price IS DISTINCT FROM upserted.current_price
           END
         ) AS "priceChanged",
         CASE
           WHEN existing.source_current_price > 0
             AND upserted.source_current_price IS NOT NULL
+            AND existing.source_currency IS NOT NULL
+            AND upserted.source_currency IS NOT NULL
+            AND existing.source_currency = upserted.source_currency
             AND upserted.source_current_price < existing.source_current_price
           THEN (
             (existing.source_current_price - upserted.source_current_price)
@@ -385,6 +401,9 @@ export async function POST(request: Request) {
           WHEN upserted.source_current_price IS NULL
             AND existing.current_price > 0
             AND upserted.current_price IS NOT NULL
+            AND existing.currency IS NOT NULL
+            AND upserted.currency IS NOT NULL
+            AND existing.currency = upserted.currency
             AND upserted.current_price < existing.current_price
           THEN (
             (existing.current_price - upserted.current_price)

@@ -11,6 +11,10 @@ let persistenceCalls = 0;
 let evaluationCalls = 0;
 let slackCalls = 0;
 let persistedQueries: Array<{ text: string; values: unknown[] }> = [];
+let transactionResultFactory: ((query: {
+  text: string;
+  values: unknown[];
+}) => Record<string, unknown>) | null = null;
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -27,29 +31,35 @@ mockModule("@neondatabase/serverless", {
       strings: TemplateStringsArray,
       ...values: unknown[]
     ) => {
-      persistedQueries.push({ text: strings.join(" "), values });
-      return undefined;
+      const query = { text: strings.join(" "), values };
+      persistedQueries.push(query);
+      return query;
     };
 
     return Object.assign(
       sql,
       {
-        transaction: async (queries: unknown[]) => {
+        transaction: async (queries: Array<{
+          text: string;
+          values: unknown[];
+        }>) => {
           persistenceCalls += 1;
-          return queries.map(() => [{
-            productId: "42",
-            title: "Test shoe",
-            currentPrice: "1200",
-            currency: "DKK",
-            sourceCurrentPrice: null,
-            sourceCurrency: null,
-            hidden: false,
-            inserted: true,
-            snapshotId: "snapshot-42",
-            priceChanged: false,
-            priceDropPercent: null,
-            discountPercent: "20",
-          }]);
+          return queries.map((query) => [
+            transactionResultFactory?.(query) ?? {
+              productId: "42",
+              title: "Test shoe",
+              currentPrice: "1200",
+              currency: "DKK",
+              sourceCurrentPrice: null,
+              sourceCurrency: null,
+              hidden: false,
+              inserted: true,
+              snapshotId: "snapshot-42",
+              priceChanged: false,
+              priceDropPercent: null,
+              discountPercent: "20",
+            },
+          ]);
         },
       },
     );
@@ -90,6 +100,7 @@ function reset() {
   evaluationCalls = 0;
   slackCalls = 0;
   persistedQueries = [];
+  transactionResultFactory = null;
 }
 
 function importRequest(authorization?: string) {
@@ -199,6 +210,97 @@ test("preserves the import flow for a valid bearer credential", async () => {
     snapshotsInserted: 2,
     productsEvaluated: 1,
   });
+});
+
+test("only reports import price changes and drops for matching explicit currencies", async (t) => {
+  for (const [description, previousCurrency, currentCurrency, comparable] of [
+    ["DKK to DKK", "DKK", "DKK", true],
+    ["DKK to EUR", "DKK", "EUR", false],
+    ["null to null", null, null, false],
+    ["null to DKK", null, "DKK", false],
+    ["DKK to null", "DKK", null, false],
+  ] as const) {
+    await t.test(description, async () => {
+      reset();
+      const importResults: Array<{
+        priceChanged: boolean;
+        priceDropPercent: string | null;
+      }> = [];
+
+      globalThis.fetch = async (input) => {
+        feedFetchCalls += 1;
+        const url = String(input);
+
+        return Response.json({
+          products: [{
+            url: `https://example.com/${url.includes("vinted") ? "vinted" : "zalando"}`,
+            title: "Test shoe",
+            currency: currentCurrency,
+            checked_at: "2026-08-30T12:00:00.000Z",
+            ...(url.includes("vinted") ? { price: 120 } : { current_price: 1200 }),
+          }],
+        });
+      };
+
+      transactionResultFactory = (query) => {
+        assert.match(
+          query.text,
+          /existing\.currency IS NOT NULL\s+AND upserted\.currency IS NOT NULL\s+AND existing\.currency = upserted\.currency/,
+        );
+
+        const currentPrice = query.values.find(
+          (value): value is number => typeof value === "number",
+        )!;
+        const currency = query.values.find(
+          (value) => value === currentCurrency) as string | null;
+        const currenciesMatch =
+          previousCurrency !== null &&
+          currency !== null &&
+          previousCurrency === currency;
+        const priceChanged = currenciesMatch && currentPrice !== 1_000;
+        const priceDropPercent =
+          currenciesMatch && currentPrice < 1_000
+            ? String(((1_000 - currentPrice) / 1_000) * 100)
+            : null;
+
+        importResults.push({ priceChanged, priceDropPercent });
+
+        return {
+          productId: "42",
+          title: "Test shoe",
+          currentPrice: String(currentPrice),
+          currency,
+          sourceCurrentPrice: null,
+          sourceCurrency: null,
+          hidden: false,
+          inserted: false,
+          snapshotId: "snapshot-42",
+          priceChanged,
+          priceDropPercent,
+          discountPercent: null,
+        };
+      };
+
+      const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+      assert.equal(response.status, 200);
+      assert.equal(importResults.length, 2);
+
+      if (comparable) {
+        for (const result of importResults) {
+          assert.equal(result.priceChanged, true);
+        }
+        assert.ok(
+          importResults.some((result) => result.priceDropPercent !== null),
+        );
+      } else {
+        for (const result of importResults) {
+          assert.equal(result.priceChanged, false);
+          assert.equal(result.priceDropPercent, null);
+        }
+      }
+    });
+  }
 });
 
 test("fails when a required active feed is unavailable", async (t) => {

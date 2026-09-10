@@ -14,11 +14,13 @@ type ProductRow = {
   watched?: boolean;
   observationCount?: number;
   lowestObservedPrice?: string | null;
+  currency?: string | null;
 };
 
 type SnapshotRow = {
   productId: string;
   currentPrice: number | null;
+  currency: string | null;
 };
 
 type QueryCall = {
@@ -91,7 +93,11 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
       .filter((snapshot) => snapshot.productId === product.id)
       .filter(
         (snapshot): snapshot is SnapshotRow & { currentPrice: number } =>
-          snapshot.currentPrice !== null && snapshot.currentPrice >= 0,
+          snapshot.currentPrice !== null &&
+          snapshot.currentPrice >= 0 &&
+          snapshot.currency !== null &&
+          product.currency !== null &&
+          snapshot.currency === product.currency,
       );
 
     return {
@@ -170,24 +176,29 @@ test("dashboard queries include SQL snapshot aggregates for count and minimum pr
 
   assert.match(fields, /COALESCE\(snapshot_stats\.observation_count, 0\)::INT AS "observationCount"/);
   assert.match(fields, /snapshot_stats\.lowest_observed_price::TEXT AS "lowestObservedPrice"/);
+  assert.match(join, /LEFT JOIN LATERAL/);
   assert.match(join, /COUNT\(current_price\) AS observation_count/);
   assert.doesNotMatch(join, /COUNT\(DISTINCT current_price\)/);
   assert.match(join, /MIN\(current_price\) AS lowest_observed_price/);
   assert.match(
     join,
-    /WHERE current_price IS NOT NULL\s+AND current_price >= 0/,
+    /WHERE product_id = p\.id\s+AND current_price IS NOT NULL\s+AND current_price >= 0\s+AND currency IS NOT NULL\s+AND p\.currency IS NOT NULL\s+AND currency = p\.currency/,
   );
 });
 
 test("dashboard query aggregates repeated valid prices and ignores null and negative prices", async () => {
   reset();
-  listProducts = [{ id: "product-1", lastSeenAt: cutoff.toISOString() }];
+  listProducts = [{
+    id: "product-1",
+    lastSeenAt: cutoff.toISOString(),
+    currency: "DKK",
+  }];
   snapshots = [
-    { productId: "product-1", currentPrice: 100 },
-    { productId: "product-1", currentPrice: 100 },
-    { productId: "product-1", currentPrice: null },
-    { productId: "product-1", currentPrice: -10 },
-    { productId: "product-1", currentPrice: 80 },
+    { productId: "product-1", currentPrice: 100, currency: "DKK" },
+    { productId: "product-1", currentPrice: 100, currency: "DKK" },
+    { productId: "product-1", currentPrice: null, currency: "DKK" },
+    { productId: "product-1", currentPrice: -10, currency: "DKK" },
+    { productId: "product-1", currentPrice: 80, currency: "DKK" },
   ];
 
   const result = await getLatestDashboardProducts(
@@ -202,6 +213,41 @@ test("dashboard query aggregates repeated valid prices and ignores null and nega
   assert.equal(result[0]?.observationCount, 3);
   assert.equal(result[0]?.lowestObservedPrice, "80");
   assert.equal(queryCalls.length, 1);
+});
+
+test("dashboard query compares only historical prices with the product's explicit currency", async (t) => {
+  for (const [description, productCurrency, snapshotCurrency, expectedCount] of [
+    ["DKK to DKK", "DKK", "DKK", 1],
+    ["DKK to EUR", "EUR", "DKK", 0],
+    ["null to null", null, null, 0],
+    ["null to DKK", "DKK", null, 0],
+    ["DKK to null", null, "DKK", 0],
+  ] as const) {
+    await t.test(description, async () => {
+      reset();
+      listProducts = [{
+        id: "product-1",
+        lastSeenAt: cutoff.toISOString(),
+        currency: productCurrency,
+      }];
+      snapshots = [{
+        productId: "product-1",
+        currentPrice: 100,
+        currency: snapshotCurrency,
+      }];
+
+      const [product] = await getLatestDashboardProducts(
+        sql,
+        null,
+        "best_match",
+        "visible",
+        null,
+      );
+
+      assert.equal(product?.observationCount, expectedCount);
+      assert.equal(product?.lowestObservedPrice, expectedCount ? "100" : null);
+    });
+  }
 });
 
 test("Watchlist returns watched products only and includes persisted Watch state", async () => {

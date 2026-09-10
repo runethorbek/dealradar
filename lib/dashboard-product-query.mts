@@ -12,16 +12,18 @@ export const snapshotSummaryFields = (sql: DashboardSqlFragment) => sql`
 `;
 
 export const snapshotSummaryJoin = (sql: DashboardSqlFragment) => sql`
-  LEFT JOIN (
+  LEFT JOIN LATERAL (
     SELECT
-      product_id,
       COUNT(current_price) AS observation_count,
       MIN(current_price) AS lowest_observed_price
     FROM product_snapshots
-    WHERE current_price IS NOT NULL
+    WHERE product_id = p.id
+      AND current_price IS NOT NULL
       AND current_price >= 0
-    GROUP BY product_id
-  ) snapshot_stats ON snapshot_stats.product_id = p.id
+      AND currency IS NOT NULL
+      AND p.currency IS NOT NULL
+      AND currency = p.currency
+  ) snapshot_stats ON TRUE
 `;
 
 export type DashboardSort = "best_match" | "best_deal" | "newest";
