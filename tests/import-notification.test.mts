@@ -24,6 +24,7 @@ const summary = {
 const recommendations: ImportRecommendation[] = [
   {
     productId: "1",
+    externalUrl: "https://retailer.example/products/deal-one",
     title: "Deal One",
     currentPrice: "900.00",
     currency: "DKK",
@@ -35,6 +36,7 @@ const recommendations: ImportRecommendation[] = [
   },
   {
     productId: "2",
+    externalUrl: "https://retailer.example/products/deal-two",
     title: "Deal Two",
     currentPrice: "1200.00",
     currency: "DKK",
@@ -54,6 +56,7 @@ test("evaluates hidden and visible products before selecting a visible recommend
   const importedResults: ImportEvaluationResult[] = [
     {
       productId: "hidden",
+      externalUrl: "https://retailer.example/products/hidden",
       title: "Hidden deal",
       currentPrice: "1200.00",
       currency: "DKK",
@@ -67,6 +70,7 @@ test("evaluates hidden and visible products before selecting a visible recommend
     },
     {
       productId: "visible",
+      externalUrl: "https://retailer.example/products/visible",
       title: "Visible deal",
       currentPrice: "900.00",
       currency: "DKK",
@@ -108,6 +112,7 @@ test("returns no recommendation when every evaluated product is hidden", async (
   const importedResults: ImportEvaluationResult[] = [
     {
       productId: "hidden-source-price",
+      externalUrl: "https://retailer.example/products/hidden-source-price",
       title: "Hidden source-priced deal",
       currentPrice: null,
       currency: null,
@@ -137,6 +142,7 @@ test("returns no recommendation when every evaluated product is hidden", async (
 test("prefers complete normalized pricing over a higher-ranked source-price fallback", () => {
   const sourcePriceOnly: ImportRecommendation = {
     productId: "3",
+    externalUrl: "https://retailer.example/products/source-priced",
     title: "Source-priced deal",
     currentPrice: null,
     currency: null,
@@ -156,6 +162,7 @@ test("prefers complete normalized pricing over a higher-ranked source-price fall
 test("falls back to complete preserved source pricing", () => {
   const sourcePriceOnly: ImportRecommendation = {
     productId: "3",
+    externalUrl: "https://retailer.example/products/source-priced",
     title: "Source-priced deal",
     currentPrice: null,
     currency: null,
@@ -172,6 +179,7 @@ test("falls back to complete preserved source pricing", () => {
 test("does not select a recommendation without a complete price and currency", () => {
   const incomplete: ImportRecommendation = {
     productId: "4",
+    externalUrl: "https://retailer.example/products/incomplete",
     title: "Incomplete deal",
     currentPrice: "100.00",
     currency: null,
@@ -185,35 +193,33 @@ test("does not select a recommendation without a complete price and currency", (
   assert.equal(selectTopRecommendation([incomplete]), null);
 });
 
-test("keeps the existing import summary when there is no recommendation", () => {
+test("formats a valid summary without a recommendation or visible Git ref", () => {
   assert.equal(
-    formatImportSlackMessage(summary, null, "https://dealradar.example"),
-    "DealRadar updated (main): 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated",
+    formatImportSlackMessage(summary, null),
+    "DealRadar updated: 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated",
   );
 });
 
-test("appends a safe recommendation with scores, price, and DealRadar link", () => {
+test("formats a safe recommendation with scores, price, and retailer link", () => {
   const recommendation = {
     ...recommendations[1],
     title: "Shoes <Special> & Co.",
     currency: "DKK<test>",
+    externalUrl: "https://retailer.example/products/deal-two?colour=brown&size=42",
   };
 
   assert.equal(
-    formatImportSlackMessage(
-      summary,
-      recommendation,
-      "https://dealradar.example",
-    ),
-    "DealRadar updated (main): 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated\n" +
-      "Top recommendation: Shoes &lt;Special&gt; &amp; Co. · Preference 9/10 · Deal 8/10 · 1200.00 DKK&lt;test&gt; · " +
-      "<https://dealradar.example/?product=2#product-2|View in DealRadar>",
+    formatImportSlackMessage(summary, recommendation),
+    "DealRadar updated: 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated\n\n" +
+      "Top recommendation:\nShoes &lt;Special&gt; &amp; Co.\nPreference 9/10 · Deal 8/10 · 1200.00 DKK&lt;test&gt; · " +
+      "<https://retailer.example/products/deal-two?colour=brown&amp;size=42|View product>",
   );
 });
 
 test("formats preserved source pricing when normalized pricing is unavailable", () => {
   const recommendation: ImportRecommendation = {
     productId: "5",
+    externalUrl: "https://retailer.example/products/usd-deal",
     title: "USD deal",
     currentPrice: null,
     currency: null,
@@ -225,11 +231,7 @@ test("formats preserved source pricing when normalized pricing is unavailable", 
   };
 
   assert.match(
-    formatImportSlackMessage(
-      summary,
-      recommendation,
-      "https://dealradar.example",
-    ),
+    formatImportSlackMessage(summary, recommendation),
     /275\.00 USD/,
   );
 });
@@ -273,11 +275,48 @@ test("renders one partial source with escaped failure details", () => {
     formatImportSlackMessage(
       summary,
       null,
-      "https://dealradar.example",
       [warning],
     ),
     /Scan warnings:\n• Scarosso: 5\/6 pages succeeded; 1 failed\n  ◦ Boots &lt;sale&gt; — https:\/\/shop\.example\/search\?q=boots&amp;size=42: HTTP &lt;503&gt; &amp; timeout/,
   );
+});
+
+test("keeps a recommendation and scan warning in the same message", () => {
+  const warning = parsePartialScanWarning("Scarosso", {
+    scan_status: {
+      attempted_pages: 6,
+      successful_pages: 5,
+      failed_pages: 1,
+      failures: [{ name: "Boots", error: "timeout" }],
+    },
+  });
+
+  assert.ok(warning);
+  const message = formatImportSlackMessage(summary, recommendations[1], [warning]);
+
+  assert.match(message, /Top recommendation:\nDeal Two/);
+  assert.match(message, /Scan warnings:\n• Scarosso: 5\/6 pages succeeded; 1 failed/);
+});
+
+test("keeps bounded failure rendering unchanged", () => {
+  const warning = parsePartialScanWarning("Scarosso", {
+    scan_status: {
+      attempted_pages: 7,
+      successful_pages: 1,
+      failed_pages: 6,
+      failures: Array.from({ length: 6 }, (_, index) => ({
+        name: `Page ${index + 1}`,
+        error: "timeout",
+      })),
+    },
+  });
+
+  assert.ok(warning);
+  const message = formatImportSlackMessage(summary, null, [warning]);
+
+  assert.match(message, /◦ Page 5: timeout/);
+  assert.doesNotMatch(message, /◦ Page 6: timeout/);
+  assert.match(message, /◦ …and 1 more/);
 });
 
 test("renders warnings for multiple partial sources", () => {
@@ -306,7 +345,6 @@ test("renders warnings for multiple partial sources", () => {
   const message = formatImportSlackMessage(
     summary,
     null,
-    "https://dealradar.example",
     warnings,
   );
 

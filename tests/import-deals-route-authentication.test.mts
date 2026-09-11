@@ -47,6 +47,7 @@ mockModule("@neondatabase/serverless", {
           return queries.map((query) => [
             transactionResultFactory?.(query) ?? {
               productId: "42",
+              externalUrl: "https://example.com/test-shoe",
               title: "Test shoe",
               currentPrice: "1200",
               currency: "DKK",
@@ -187,6 +188,7 @@ test("preserves the import flow for a valid bearer credential", async () => {
   for (const query of persistedQueries) {
     assert.doesNotMatch(query.text, /target_size|category/i);
     assert.match(query.text, /brand/i);
+    assert.match(query.text, /RETURNING\s+id,\s+external_url,/);
 
     const rawData = query.values.find(
       (value) =>
@@ -210,6 +212,26 @@ test("preserves the import flow for a valid bearer credential", async () => {
     snapshotsInserted: 2,
     productsEvaluated: 1,
   });
+});
+
+test("skips malformed and non-HTTPS retailer URLs before persistence", async () => {
+  for (const retailerUrl of ["http://example.com/shoe", "not a URL"]) {
+    reset();
+    globalThis.fetch = async () => Response.json({
+      products: [{
+        url: retailerUrl,
+        title: "Test shoe",
+        current_price: 1200,
+        currency: "DKK",
+      }],
+    });
+
+    const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+    assert.equal(response.status, 200);
+    assert.equal(persistenceCalls, 0);
+    assert.equal((await response.json()).productsProcessed, 0);
+  }
 });
 
 test("only reports import price changes and drops for matching explicit currencies", async (t) => {
@@ -267,6 +289,7 @@ test("only reports import price changes and drops for matching explicit currenci
 
         return {
           productId: "42",
+          externalUrl: "https://example.com/test-shoe",
           title: "Test shoe",
           currentPrice: String(currentPrice),
           currency,

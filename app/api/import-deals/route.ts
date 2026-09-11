@@ -80,6 +80,21 @@ function optionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function optionalHttpsUrl(value: unknown) {
+  const text = optionalString(value);
+
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && url.hostname ? text : null;
+  } catch {
+    return null;
+  }
+}
+
 function optionalNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -131,7 +146,7 @@ function normalizeProducts(
     }
 
     const product = productValue as JsonObject;
-    const externalUrl = optionalString(product.url);
+    const externalUrl = optionalHttpsUrl(product.url);
     const title = optionalString(product.title);
     const imageUrl = optionalString(product.image);
     const sourceCurrentPrice = optionalNumber(product[definition.priceField]);
@@ -320,6 +335,7 @@ export async function POST(request: Request) {
           raw_data = EXCLUDED.raw_data
         RETURNING
           id,
+          external_url,
           title,
           current_price,
           currency,
@@ -359,6 +375,7 @@ export async function POST(request: Request) {
       )
       SELECT
         upserted.id::TEXT AS "productId",
+        upserted.external_url AS "externalUrl",
         upserted.title,
         upserted.current_price::TEXT AS "currentPrice",
         upserted.currency,
@@ -453,7 +470,6 @@ export async function POST(request: Request) {
         productsEvaluated,
       },
       selectTopRecommendation(evaluatedProducts),
-      new URL(request.url).origin,
       partialScanWarnings,
     );
 

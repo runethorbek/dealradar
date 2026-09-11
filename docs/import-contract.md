@@ -76,8 +76,8 @@ or access tokens.
 ## Known compatibility gap
 
 The current importer does not yet verify every producer-contract invariant
-before persistence. In particular, expected source identity and retailer HTTPS
-URLs, duplicate URLs within a snapshot, published-product counts, and
+before persistence. In particular, expected source identity, duplicate URLs
+within a snapshot, published-product counts, and
 non-negative source prices need explicit importer validation. This follow-up is
 tracked in [DealRadar #19](https://github.com/runethorbek/dealradar/issues/19);
 it does not change the current importer behavior.

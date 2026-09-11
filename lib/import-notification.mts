@@ -1,5 +1,6 @@
 export type ImportRecommendation = {
   productId: string;
+  externalUrl: string;
   title: string;
   currentPrice: string | null;
   currency: string | null;
@@ -179,16 +180,6 @@ function getDisplayPrice(recommendation: ImportRecommendation) {
   return null;
 }
 
-function getProductUrl(
-  appOrigin: string,
-  recommendation: ImportRecommendation,
-) {
-  const url = new URL("/", appOrigin);
-  url.searchParams.set("product", recommendation.productId);
-  url.hash = `product-${recommendation.productId}`;
-  return url.toString();
-}
-
 function selectHighestRanked(recommendations: ImportRecommendation[]) {
   return recommendations.reduce<ImportRecommendation | null>((best, item) => {
     if (!best || getOverallScore(item) > getOverallScore(best)) {
@@ -224,11 +215,10 @@ export function selectTopRecommendation(
 export function formatImportSlackMessage(
   summary: ImportSummary,
   recommendation: ImportRecommendation | null,
-  appOrigin: string,
   partialScanWarnings: PartialScanWarning[] = [],
 ) {
   const summaryMessage =
-    `DealRadar updated (${summary.ref}): ${summary.productsProcessed} processed` +
+    `DealRadar updated: ${summary.productsProcessed} processed` +
     ` · ${summary.productsInserted} new` +
     ` · ${summary.productsUpdated} updated` +
     ` · ${summary.snapshotsInserted} snapshots` +
@@ -239,22 +229,20 @@ export function formatImportSlackMessage(
   let message = summaryMessage;
 
   if (recommendation && displayPrice) {
-    const productUrl = getProductUrl(appOrigin, recommendation);
-
     message +=
-      `\nTop recommendation: ` +
-      `${escapeSlackText(recommendation.title)} · ` +
+      `\n\nTop recommendation:\n` +
+      `${escapeSlackText(recommendation.title)}\n` +
       `Preference ${recommendation.preferenceScore}/10 · ` +
       `Deal ${recommendation.dealScore}/10 · ` +
       `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · ` +
-      `<${productUrl}|View in DealRadar>`;
+      `<${escapeSlackText(recommendation.externalUrl)}|View product>`;
   }
 
   if (partialScanWarnings.length === 0) {
     return message;
   }
 
-  message += "\nScan warnings:";
+  message += "\n\nScan warnings:";
 
   for (const warning of partialScanWarnings) {
     message +=

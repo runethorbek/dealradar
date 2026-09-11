@@ -2,6 +2,7 @@ import type { ImportRecommendation } from "./import-notification.mts";
 
 export type ImportEvaluationResult = {
   productId: string;
+  externalUrl: string;
   title: string;
   currentPrice: string | null;
   currency: string | null;
@@ -17,6 +18,7 @@ export type ImportEvaluationResult = {
 export type EvaluationCandidate = Pick<
   ImportEvaluationResult,
   | "productId"
+  | "externalUrl"
   | "title"
   | "currentPrice"
   | "currency"
@@ -92,6 +94,7 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
 
     candidatesByProduct.set(result.productId, {
       productId: result.productId,
+      externalUrl: result.externalUrl,
       title: result.title,
       currentPrice: result.currentPrice,
       currency: result.currency,
@@ -148,6 +151,7 @@ export async function evaluateCandidates(
 
         return {
           productId: candidate.productId,
+          externalUrl: candidate.externalUrl,
           title: candidate.title,
           currentPrice: candidate.currentPrice,
           currency: candidate.currency,
