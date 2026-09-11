@@ -8,8 +8,8 @@ import {
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
-  selectTopRecommendation,
 } from "@/lib/import-notification.mts";
+import { selectSlackHighlight } from "@/lib/slack-highlight.mts";
 import { postSlackMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -456,6 +456,43 @@ export async function POST(request: Request) {
         : null,
     );
     const productsEvaluated = evaluatedProducts.length;
+    const productIds = [...new Set(importResults.map((result) => result.productId))];
+    const highlightStateRows = productIds.length
+      ? await sql`
+          SELECT
+            p.id::TEXT AS "productId",
+            p.watched,
+            pf.rating AS feedback,
+            pe.preference_score AS "preferenceScore",
+            pe.deal_score AS "dealScore"
+          FROM products p
+          LEFT JOIN product_feedback pf ON pf.product_id = p.id
+          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
+          WHERE p.id = ANY(${productIds})
+        `
+      : [];
+    const highlightStateByProductId = new Map(
+      highlightStateRows.map((row) => [
+        String(row.productId),
+        {
+          watched: row.watched === true,
+          feedback:
+            row.feedback === "like" || row.feedback === "dislike"
+              ? row.feedback
+              : null,
+          preferenceScore:
+            typeof row.preferenceScore === "number" ? row.preferenceScore : null,
+          dealScore: typeof row.dealScore === "number" ? row.dealScore : null,
+        },
+      ]),
+    );
+    const slackHighlight = selectSlackHighlight(
+      importResults.flatMap((result) => {
+        const state = highlightStateByProductId.get(result.productId);
+
+        return state ? [{ ...result, ...state }] : [];
+      }),
+    );
     const productsUpdated = products.length - productsInserted;
     const snapshotsInserted = importResults.filter(
       (result) => result.snapshotId,
@@ -469,7 +506,7 @@ export async function POST(request: Request) {
         snapshotsInserted,
         productsEvaluated,
       },
-      selectTopRecommendation(evaluatedProducts),
+      slackHighlight,
       partialScanWarnings,
     );
 

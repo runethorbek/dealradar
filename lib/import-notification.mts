@@ -11,6 +11,14 @@ export type ImportRecommendation = {
   dealScore: number;
 };
 
+export type ImportSlackHighlight = Omit<
+  ImportRecommendation,
+  "preferenceScore" | "dealScore"
+> & {
+  preferenceScore: number | null;
+  dealScore: number | null;
+};
+
 export type ImportSummary = {
   ref: string;
   productsProcessed: number;
@@ -38,9 +46,19 @@ const maximumRenderedFailures = 5;
 const maximumFailureNameLength = 120;
 const maximumFailureErrorLength = 240;
 
+export function getOverallEvaluationScore(
+  preferenceScore: number,
+  dealScore: number,
+) {
+  return preferenceScore * 0.6 + dealScore * 0.4;
+}
+
 function getOverallScore(recommendation: ImportRecommendation) {
   return Math.round(
-    recommendation.preferenceScore * 0.6 + recommendation.dealScore * 0.4,
+    getOverallEvaluationScore(
+      recommendation.preferenceScore,
+      recommendation.dealScore,
+    ),
   );
 }
 
@@ -159,7 +177,7 @@ export function parsePartialScanWarning(
   };
 }
 
-function getDisplayPrice(recommendation: ImportRecommendation) {
+function getDisplayPrice(recommendation: ImportSlackHighlight) {
   if (recommendation.currentPrice !== null && recommendation.currency !== null) {
     return {
       price: recommendation.currentPrice,
@@ -214,7 +232,7 @@ export function selectTopRecommendation(
 
 export function formatImportSlackMessage(
   summary: ImportSummary,
-  recommendation: ImportRecommendation | null,
+  recommendation: ImportSlackHighlight | null,
   partialScanWarnings: PartialScanWarning[] = [],
 ) {
   const summaryMessage =
@@ -228,13 +246,21 @@ export function formatImportSlackMessage(
     : null;
   let message = summaryMessage;
 
-  if (recommendation && displayPrice) {
+  if (recommendation) {
+    const scores =
+      recommendation.preferenceScore !== null && recommendation.dealScore !== null
+        ? `Preference ${recommendation.preferenceScore}/10 · ` +
+          `Deal ${recommendation.dealScore}/10 · `
+        : "";
+    const price = displayPrice
+      ? `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · `
+      : "";
+
     message +=
       `\n\nTop recommendation:\n` +
       `${escapeSlackText(recommendation.title)}\n` +
-      `Preference ${recommendation.preferenceScore}/10 · ` +
-      `Deal ${recommendation.dealScore}/10 · ` +
-      `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · ` +
+      scores +
+      price +
       `<${escapeSlackText(recommendation.externalUrl)}|View product>`;
   }
 

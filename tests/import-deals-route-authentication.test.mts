@@ -33,7 +33,18 @@ mockModule("@neondatabase/serverless", {
     ) => {
       const query = { text: strings.join(" "), values };
       persistedQueries.push(query);
-      return query;
+      return Object.assign(query, {
+        then: (resolve: (rows: Array<Record<string, unknown>>) => unknown) =>
+          resolve([
+            {
+              productId: "42",
+              watched: false,
+              feedback: null,
+              preferenceScore: 8,
+              dealScore: 7,
+            },
+          ]),
+      });
     };
 
     return Object.assign(
@@ -183,9 +194,11 @@ test("preserves the import flow for a valid bearer credential", async () => {
   assert.equal(persistenceCalls, 1);
   assert.equal(evaluationCalls, 1);
   assert.equal(slackCalls, 1);
-  assert.equal(persistedQueries.length, 2);
+  assert.equal(persistedQueries.length, 3);
 
-  for (const query of persistedQueries) {
+  for (const query of persistedQueries.filter((query) =>
+    query.text.includes("INSERT INTO products"),
+  )) {
     assert.doesNotMatch(query.text, /target_size|category/i);
     assert.match(query.text, /brand/i);
     assert.match(query.text, /RETURNING\s+id,\s+external_url,/);

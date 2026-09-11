@@ -80,9 +80,11 @@ The Watchlist includes both visible and hidden watched products. Hidden
 products remain clearly identified as Hidden there; Watch does not change
 their visibility.
 
-Watch currently records persistent explicit interest only. Target prices,
-price alerts, notifications, evaluation input, and higher-priority treatment
-are intentionally deferred.
+Watch records persistent explicit interest. For Slack import highlights only,
+a visible Watched product that existed before the import and has a valid
+same-currency price drop of at least 5% receives first selection priority.
+This does not change dashboard ranking, visibility, feedback, evaluation input,
+or the absence of target-price alerts.
 
 ## Preference score
 

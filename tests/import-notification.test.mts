@@ -216,6 +216,26 @@ test("formats a safe recommendation with scores, price, and retailer link", () =
   );
 });
 
+test("keeps an unevaluated highlight and Scan warning in the normal Slack message", () => {
+  const message = formatImportSlackMessage(
+    summary,
+    { ...recommendations[0], preferenceScore: null, dealScore: null },
+    [
+      {
+        sourceName: "Zalando",
+        successfulPages: 5,
+        attemptedPages: 6,
+        failedPages: 1,
+        failures: [{ name: "Page 6", url: null, error: "timeout" }],
+      },
+    ],
+  );
+
+  assert.match(message, /Top recommendation:\nDeal One\n900\.00 DKK/);
+  assert.doesNotMatch(message, /Preference null|Deal null/);
+  assert.match(message, /Scan warnings:/);
+});
+
 test("formats preserved source pricing when normalized pricing is unavailable", () => {
   const recommendation: ImportRecommendation = {
     productId: "5",
