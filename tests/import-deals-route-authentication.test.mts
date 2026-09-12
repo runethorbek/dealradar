@@ -122,6 +122,29 @@ function importRequest(authorization?: string) {
   });
 }
 
+function sourceForUrl(url: string) {
+  return url.includes("vinted-latest.json")
+    ? { site: "vinted.com", domain: "www.vinted.dk", priceField: "price" }
+    : { site: "zalando.dk", domain: "www.zalando.dk", priceField: "current_price" };
+}
+
+function validFeed(url: string, products?: Array<Record<string, unknown>>) {
+  const source = sourceForUrl(url);
+  const feedProducts = products ?? [{
+    url: `https://${source.domain}/items/test-shoe`,
+    title: "Test shoe",
+    currency: "DKK",
+    [source.priceField]: 1200,
+  }];
+
+  return {
+    site: source.site,
+    product_count: feedProducts.length,
+    checked_at: "2026-08-30T12:00:00.000Z",
+    products: feedProducts,
+  };
+}
+
 function assertNoImportSideEffects() {
   assert.equal(feedFetchCalls, 0);
   assert.equal(neonCalls, 0);
@@ -162,8 +185,9 @@ test("preserves the import flow for a valid bearer credential", async () => {
     const url = String(input);
     requestedFeedUrls.push(url);
 
+    const source = sourceForUrl(url);
     const sourceProduct = {
-      url: `https://example.com/test-shoe-${feedFetchCalls}`,
+      url: `https://${source.domain}/items/test-shoe-${feedFetchCalls}`,
       title: "Test shoe",
       currency: "DKK",
       target_size: "42",
@@ -176,7 +200,8 @@ test("preserves the import flow for a valid bearer credential", async () => {
     };
 
     return Response.json({
-      site: "example.com",
+      site: source.site,
+      product_count: 1,
       checked_at: "2026-08-30T12:00:00.000Z",
       products: [sourceProduct],
     });
@@ -224,27 +249,91 @@ test("preserves the import flow for a valid bearer credential", async () => {
     productsUpdated: 0,
     snapshotsInserted: 2,
     productsEvaluated: 1,
+    productsSkippedInvalidPrice: 0,
   });
 });
 
-test("skips malformed and non-HTTPS retailer URLs before persistence", async () => {
-  for (const retailerUrl of ["http://example.com/shoe", "not a URL"]) {
+test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {
+  const cases = [
+    ["site mismatch", (url: string) => ({ ...validFeed(url), site: "wrong.example" })],
+    ["malformed URL", (url: string) => validFeed(url, [{ url: "not a URL", title: "Test shoe", current_price: 1200 }])],
+    ["HTTP URL", (url: string) => validFeed(url, [{ url: "http://www.zalando.dk/items/test", title: "Test shoe", current_price: 1200 }])],
+    ["wrong retailer", (url: string) => validFeed(url, [{ url: "https://not-zalando.dk/items/test", title: "Test shoe", current_price: 1200 }])],
+    ["duplicate URL", (url: string) => validFeed(url, [
+      { url: "https://www.zalando.dk/items/test", title: "One", current_price: 1200 },
+      { url: "https://www.zalando.dk/items/test", title: "Two", current_price: 1200 },
+    ])],
+    ["whitespace-normalized duplicate URL", (url: string) => validFeed(url, [
+      { url: "https://www.zalando.dk/items/test", title: "One", current_price: 1200 },
+      { url: " https://www.zalando.dk/items/test ", title: "Two", current_price: 1200 },
+    ])],
+    ["product count mismatch", (url: string) => ({ ...validFeed(url), product_count: 2 })],
+  ] as const;
+
+  for (const [description, feed] of cases) {
+    await t.test(description, async () => {
     reset();
-    globalThis.fetch = async () => Response.json({
-      products: [{
-        url: retailerUrl,
-        title: "Test shoe",
-        current_price: 1200,
-        currency: "DKK",
-      }],
-    });
+      globalThis.fetch = async (input) => {
+        feedFetchCalls += 1;
+        const url = String(input);
+        return Response.json(url.includes("zalando-latest.json") ? feed(url) : validFeed(url));
+      };
 
     const response = await POST(importRequest("Bearer valid-ingest-key"));
 
-    assert.equal(response.status, 200);
+      assert.equal(response.status, 500);
+      assert.equal(feedFetchCalls, 2);
+      assert.equal(neonCalls, 0);
     assert.equal(persistenceCalls, 0);
-    assert.equal((await response.json()).productsProcessed, 0);
+      assert.equal(slackCalls, 0);
+    });
   }
+});
+
+test("accepts matching product counts and omitted optional product_count", async (t) => {
+  for (const [description, removeCount] of [["matching count", false], ["missing count", true]] as const) {
+    await t.test(description, async () => {
+      reset();
+      globalThis.fetch = async (input) => {
+        const feed = validFeed(String(input));
+        const feedWithoutCount = { ...feed };
+        Reflect.deleteProperty(feedWithoutCount, "product_count");
+        return Response.json(removeCount ? feedWithoutCount : feed);
+      };
+
+      const response = await POST(importRequest("Bearer valid-ingest-key"));
+      assert.equal(response.status, 200);
+      assert.equal(persistenceCalls, 1);
+    });
+  }
+});
+
+test("skips only products with invalid current prices", async () => {
+  reset();
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    const source = sourceForUrl(url);
+    const feed = validFeed(url, [
+      { url: `https://${source.domain}/items/positive`, title: "Positive", [source.priceField]: 1200 },
+      { url: `https://${source.domain}/items/zero`, title: "Zero", [source.priceField]: 0 },
+      { url: `https://${source.domain}/items/negative`, title: "Negative", [source.priceField]: -1 },
+      { url: `https://${source.domain}/items/non-finite`, title: "Non-finite", [source.priceField]: Number.POSITIVE_INFINITY },
+      { url: `https://${source.domain}/items/unsafe`, title: "Unsafe", [source.priceField]: Number.MAX_SAFE_INTEGER + 1 },
+      { url: `https://${source.domain}/items/unparsable`, title: "Unparsable", [source.priceField]: "1200 DKK" },
+      { url: `https://${source.domain}/items/no-title`, [source.priceField]: -1 },
+    ]);
+    return { ok: true, status: 200, json: async () => feed } as Response;
+  };
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.productsProcessed, 4);
+  assert.equal(body.productsSkippedInvalidPrice, 10);
+  assert.equal(persistenceCalls, 1);
+  assert.equal(persistedQueries.filter((query) => query.text.includes("INSERT INTO products")).length, 4);
+  assert.ok(persistedQueries.every((query) => !query.values.includes(-1)));
 });
 
 test("only reports import price changes and drops for matching explicit currencies", async (t) => {
@@ -266,9 +355,12 @@ test("only reports import price changes and drops for matching explicit currenci
         feedFetchCalls += 1;
         const url = String(input);
 
+        const source = sourceForUrl(url);
         return Response.json({
+          site: source.site,
+          product_count: 1,
           products: [{
-            url: `https://example.com/${url.includes("vinted") ? "vinted" : "zalando"}`,
+            url: `https://${source.domain}/items/test-shoe`,
             title: "Test shoe",
             currency: currentCurrency,
             checked_at: "2026-08-30T12:00:00.000Z",

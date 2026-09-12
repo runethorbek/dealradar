@@ -58,8 +58,18 @@ concerns.
 ## Validation and tolerance
 
 Feeds are external input from DealRadar's perspective and are validated before
-use. Products without usable `url` or `title` may be skipped safely. Unknown
-additive fields are tolerated.
+use. A configured feed must declare its expected `site`; every product URL
+must be a parseable HTTPS URL for that retailer domain; URLs must be unique
+within the snapshot; and a present `product_count` must equal
+`products.length`. A violation fails the global import before persistence.
+Product titles that are unusable may be skipped safely. Unknown additive fields
+are tolerated.
+
+The producer's source-specific current-price field is accepted only when it is
+`null` or a finite, non-negative number. A malformed, non-finite, or negative
+current price skips that product while valid siblings continue importing; the
+import result reports the aggregate number skipped. DealRadar does not coerce
+price strings or other malformed values into persisted prices.
 
 `scan_status` is optional diagnostic metadata. When present, valid status data
 may be surfaced as a partial-scan warning; `failed_pages > 0` does not by
@@ -74,15 +84,6 @@ current import time according to application behavior.
 Diagnostic strings are untrusted external text. They must be sanitized before
 rendering and must never expose credentials, API keys, authorization headers,
 or access tokens.
-
-## Known compatibility gap
-
-The current importer does not yet verify every producer-contract invariant
-before persistence. In particular, expected source identity, duplicate URLs
-within a snapshot, published-product counts, and
-non-negative source prices need explicit importer validation. This follow-up is
-tracked in [DealRadar #19](https://github.com/runethorbek/dealradar/issues/19);
-it does not change the current importer behavior.
 
 ## Compatibility process
 

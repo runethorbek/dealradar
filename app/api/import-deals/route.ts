@@ -38,19 +38,26 @@ type ImportResult = ImportEvaluationResult & {
   snapshotId: string | null;
 };
 
+type NormalizationResult = {
+  products: NormalizedProduct[];
+  productsSkippedInvalidPrice: number;
+};
+
 class SourceDataError extends Error {}
 
 const repositoryUrl = "https://raw.githubusercontent.com/runethorbek/deals";
 const sources = [
   {
     name: "Zalando",
-    fallbackSource: "zalando.dk",
+    expectedSite: "zalando.dk",
+    expectedProductDomain: "zalando.dk",
     fileName: "zalando-latest.json",
     priceField: "current_price",
   },
   {
     name: "Vinted",
-    fallbackSource: "vinted.com",
+    expectedSite: "vinted.com",
+    expectedProductDomain: "vinted.dk",
     fileName: "vinted-latest.json",
     priceField: "price",
   },
@@ -108,6 +115,90 @@ function optionalNumber(value: unknown) {
   return null;
 }
 
+function isExpectedRetailerHostname(hostname: string, domain: string) {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function validateFeed(
+  payloadValue: unknown,
+  definition: (typeof sources)[number],
+) {
+  const payload = asObject(payloadValue, `${definition.name} feed`);
+
+  if (!Array.isArray(payload.products)) {
+    throw new SourceDataError(
+      `${definition.name} feed does not contain a products array.`,
+    );
+  }
+
+  if (payload.site !== definition.expectedSite) {
+    throw new SourceDataError(
+      `${definition.name} feed site must be ${definition.expectedSite}.`,
+    );
+  }
+
+  if (
+    payload.product_count !== undefined &&
+    payload.product_count !== payload.products.length
+  ) {
+    throw new SourceDataError(
+      `${definition.name} feed product_count does not match products.length.`,
+    );
+  }
+
+  const urls = new Set<string>();
+
+  for (const productValue of payload.products) {
+    const product = asObject(productValue, `${definition.name} feed product`);
+    const urlText = product.url;
+
+    if (
+      typeof urlText !== "string" ||
+      !urlText.trim() ||
+      urlText !== urlText.trim()
+    ) {
+      throw new SourceDataError(`${definition.name} feed product URL is invalid.`);
+    }
+
+    let url: URL;
+
+    try {
+      url = new URL(urlText);
+    } catch {
+      throw new SourceDataError(`${definition.name} feed product URL is invalid.`);
+    }
+
+    if (
+      url.protocol !== "https:" ||
+      !isExpectedRetailerHostname(
+        url.hostname.toLowerCase(),
+        definition.expectedProductDomain,
+      )
+    ) {
+      throw new SourceDataError(`${definition.name} feed product URL is invalid.`);
+    }
+
+    if (urls.has(urlText)) {
+      throw new SourceDataError(`${definition.name} feed contains duplicate product URLs.`);
+    }
+
+    urls.add(urlText);
+  }
+
+  return payload;
+}
+
+function currentPrice(value: unknown) {
+  return value === null || (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+  )
+    ? value
+    : undefined;
+}
+
 function optionalBoolean(value: unknown) {
   return typeof value === "boolean" ? value : null;
 }
@@ -123,20 +214,14 @@ function validTimestamp(...values: unknown[]) {
 }
 
 function normalizeProducts(
-  payloadValue: unknown,
+  payload: JsonObject,
   definition: (typeof sources)[number],
-) {
-  const payload = asObject(payloadValue, `${definition.name} feed`);
+) : NormalizationResult {
+  const source = definition.expectedSite;
+  const productValues = payload.products as unknown[];
+  let productsSkippedInvalidPrice = 0;
 
-  if (!Array.isArray(payload.products)) {
-    throw new SourceDataError(
-      `${definition.name} feed does not contain a products array.`,
-    );
-  }
-
-  const source = optionalString(payload.site) ?? definition.fallbackSource;
-
-  return payload.products.flatMap((productValue): NormalizedProduct[] => {
+  const products = productValues.flatMap((productValue): NormalizedProduct[] => {
     if (
       typeof productValue !== "object" ||
       productValue === null ||
@@ -149,9 +234,14 @@ function normalizeProducts(
     const externalUrl = optionalHttpsUrl(product.url);
     const title = optionalString(product.title);
     const imageUrl = optionalString(product.image);
-    const sourceCurrentPrice = optionalNumber(product[definition.priceField]);
+    const sourceCurrentPrice = currentPrice(product[definition.priceField]);
     const sourceOriginalPrice = optionalNumber(product.original_price);
     const sourceCurrency = optionalString(product.currency);
+
+    if (sourceCurrentPrice === undefined) {
+      productsSkippedInvalidPrice += 1;
+      return [];
+    }
 
     if (!externalUrl || !title) {
       return [];
@@ -200,6 +290,8 @@ function normalizeProducts(
       rawData: product,
     }];
   });
+
+  return { products, productsSkippedInvalidPrice };
 }
 
 async function fetchSourcePayload(
@@ -265,10 +357,17 @@ export async function POST(request: Request) {
       const warning = parsePartialScanWarning(sources[index].name, payload);
       return warning ? [warning] : [];
     });
-    const productsBySource = sourcePayloads.map((payload, index) =>
+    const validatedPayloads = sourcePayloads.map((payload, index) =>
+      validateFeed(payload, sources[index]),
+    );
+    const normalizationResults = validatedPayloads.map((payload, index) =>
       normalizeProducts(payload, sources[index]),
     );
-    const products = productsBySource.flat();
+    const products = normalizationResults.flatMap((result) => result.products);
+    const productsSkippedInvalidPrice = normalizationResults.reduce(
+      (total, result) => total + result.productsSkippedInvalidPrice,
+      0,
+    );
     const sql = neon(databaseUrl);
 
     const queries = products.map((product) => sql`
@@ -531,6 +630,7 @@ export async function POST(request: Request) {
       productsUpdated,
       snapshotsInserted,
       productsEvaluated,
+      productsSkippedInvalidPrice,
     });
   } catch (error) {
     const message =
