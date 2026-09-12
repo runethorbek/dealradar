@@ -1,5 +1,4 @@
 import { neon } from "@neondatabase/serverless";
-import Link from "next/link";
 import { connection } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
@@ -9,7 +8,6 @@ import {
   type DashboardView,
 } from "@/lib/dashboard-products.mts";
 import {
-  dashboardSourceFilters,
   parseDashboardSource,
   type DashboardSource,
 } from "@/lib/dashboard-source.mts";
@@ -21,14 +19,15 @@ import {
   type DashboardSql,
 } from "@/lib/dashboard-product-query.mts";
 import {
-  dashboardFreshnessOptions,
   parseDashboardFreshness,
   type DashboardFreshness,
 } from "@/lib/dashboard-freshness.mts";
 import { parseDashboardBrand } from "@/lib/dashboard-brand.mts";
 import { parseDashboardMonitor } from "@/lib/dashboard-monitor.mts";
+import { getDashboardHref } from "@/lib/dashboard-href.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 import { AppNavigation } from "./navigation";
+import { DashboardFilterBar } from "./dashboard-filter-bar";
 
 type Source = DashboardSource;
 type Sort = DashboardSort;
@@ -38,55 +37,6 @@ const sortOptions: { label: string; value: Sort }[] = [
   { label: "Best deal", value: "best_deal" },
   { label: "Newest", value: "newest" },
 ];
-
-const viewOptions: { label: string; value: DashboardView }[] = [
-  { label: "Visible", value: "visible" },
-  { label: "Watchlist", value: "watchlist" },
-  { label: "Hidden", value: "hidden" },
-];
-
-function getDashboardHref(
-  source: Source | null,
-  sort: Sort,
-  view: DashboardView,
-  freshness: DashboardFreshness,
-  brand: string | null,
-  monitor: string | null,
-  highlightedProductId?: string | null,
-) {
-  const params = new URLSearchParams();
-
-  if (source) {
-    params.set("source", source);
-  }
-
-  if (sort !== "best_match") {
-    params.set("sort", sort);
-  }
-
-  if (view !== "visible") {
-    params.set("view", view);
-  }
-
-  if (freshness !== "24h") {
-    params.set("freshness", freshness);
-  }
-
-  if (source === "zalando.dk" && brand) {
-    params.set("brand", brand);
-  }
-
-  if (monitor) {
-    params.set("monitor", monitor);
-  }
-
-  if (highlightedProductId) {
-    params.set("product", highlightedProductId);
-  }
-
-  const query = params.toString();
-  return query ? `/?${query}` : "/";
-}
 
 async function getLatestProducts(
   source: Source | null,
@@ -187,197 +137,16 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           ) : null}
         </div>
 
-        <div className="mb-6 space-y-3">
-          <nav
-            aria-label="Choose dashboard view"
-            className="flex flex-wrap items-center gap-2"
-          >
-            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-              View
-            </span>
-            {viewOptions.map((option) => {
-              const isActive = option.value === selectedView;
-
-              return (
-                <Link
-                  key={option.value}
-                  href={getDashboardHref(
-                    selectedSource,
-                    selectedSort,
-                    option.value,
-                    selectedFreshness,
-                    selectedBrand,
-                    selectedMonitor,
-                  )}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-                    isActive
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-                  }`}
-                >
-                  {option.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          <nav
-            aria-label="Filter deals by source"
-            className="flex flex-wrap items-center gap-2"
-          >
-            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-              Source
-            </span>
-            {dashboardSourceFilters.map((filter) => {
-              const isActive = filter.value === selectedSource;
-
-              return (
-                <Link
-                  key={filter.label}
-                  href={getDashboardHref(
-                    filter.value,
-                    selectedSort,
-                    selectedView,
-                    selectedFreshness,
-                    null,
-                    selectedMonitor,
-                  )}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-                    isActive
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-                  }`}
-                >
-                  {filter.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          <nav
-            aria-label="Filter deals by freshness"
-            className="flex flex-wrap items-center gap-2"
-          >
-            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-              Freshness
-            </span>
-            {dashboardFreshnessOptions.map((option) => {
-              const isActive = option.value === selectedFreshness;
-
-              return (
-                <Link
-                  key={option.value}
-                  href={getDashboardHref(
-                    selectedSource,
-                    selectedSort,
-                    selectedView,
-                    option.value,
-                    selectedBrand,
-                    selectedMonitor,
-                  )}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-                    isActive
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-                  }`}
-                >
-                  {option.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {selectedSource === "zalando.dk" ? (
-            <form action="/" method="get" className="flex flex-wrap items-center gap-2">
-              <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-                Brand
-              </span>
-              {selectedSort !== "best_match" ? <input type="hidden" name="sort" value={selectedSort} /> : null}
-              {selectedView !== "visible" ? <input type="hidden" name="view" value={selectedView} /> : null}
-              {selectedFreshness !== "24h" ? <input type="hidden" name="freshness" value={selectedFreshness} /> : null}
-              {selectedMonitor ? <input type="hidden" name="monitor" value={selectedMonitor} /> : null}
-              <input type="hidden" name="source" value="zalando.dk" />
-              <select
-                aria-label="Filter deals by brand"
-                name="brand"
-                defaultValue={selectedBrand ?? ""}
-                className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-600"
-              >
-                <option value="">All brands</option>
-                {brands.map((brand) => (
-                  <option key={brand} value={brand}>{brand}</option>
-                ))}
-              </select>
-              <button type="submit" className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-600 hover:border-zinc-300 hover:text-zinc-950">
-                Apply
-              </button>
-            </form>
-          ) : null}
-
-          {monitors.length > 0 ? (
-            <form action="/" method="get" className="flex flex-wrap items-center gap-2">
-              <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-                Monitor
-              </span>
-              {selectedSort !== "best_match" ? <input type="hidden" name="sort" value={selectedSort} /> : null}
-              {selectedView !== "visible" ? <input type="hidden" name="view" value={selectedView} /> : null}
-              {selectedFreshness !== "24h" ? <input type="hidden" name="freshness" value={selectedFreshness} /> : null}
-              {selectedSource ? <input type="hidden" name="source" value={selectedSource} /> : null}
-              {selectedBrand ? <input type="hidden" name="brand" value={selectedBrand} /> : null}
-              <select
-                aria-label="Filter deals by monitor"
-                name="monitor"
-                defaultValue={selectedMonitor ?? ""}
-                className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-600"
-              >
-                <option value="">All monitors</option>
-                {monitors.map((monitor) => (
-                  <option key={monitor} value={monitor}>{monitor}</option>
-                ))}
-              </select>
-              <button type="submit" className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-600 hover:border-zinc-300 hover:text-zinc-950">
-                Apply
-              </button>
-            </form>
-          ) : null}
-
-          <nav
-            aria-label="Sort deals"
-            className="flex flex-wrap items-center gap-2"
-          >
-            <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
-              Sort
-            </span>
-            {sortOptions.map((option) => {
-              const isActive = option.value === selectedSort;
-
-              return (
-                <Link
-                  key={option.value}
-                  href={getDashboardHref(
-                    selectedSource,
-                    option.value,
-                    selectedView,
-                    selectedFreshness,
-                    selectedBrand,
-                    selectedMonitor,
-                  )}
-                  aria-current={isActive ? "page" : undefined}
-                  className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
-                    isActive
-                      ? "border-zinc-950 bg-zinc-950 text-white"
-                      : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950"
-                  }`}
-                >
-                  {option.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
+        <DashboardFilterBar
+          source={selectedSource}
+          sort={selectedSort}
+          view={selectedView}
+          freshness={selectedFreshness}
+          brand={selectedBrand}
+          monitor={selectedMonitor}
+          brands={brands}
+          monitors={monitors}
+        />
 
         {failed ? (
           <div className="rounded-xl border border-zinc-200 bg-white px-6 py-12 text-center shadow-sm">
