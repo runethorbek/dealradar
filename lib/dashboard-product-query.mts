@@ -96,7 +96,7 @@ export async function getLatestDashboardProducts(
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
-          AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
+          AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
           AND (
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
@@ -146,7 +146,7 @@ export async function getLatestDashboardProducts(
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
           )
-          AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
+          AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
           AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
           (pe.product_id IS NULL) ASC,
@@ -200,7 +200,7 @@ export async function getLatestDashboardProducts(
     ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}
       AND (${source} IS NULL OR p.source = ${source})
-      AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
+      AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
       AND (${view !== "watchlist"} OR p.watched = TRUE)
       AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
   `;

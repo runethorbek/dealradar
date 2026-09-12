@@ -191,7 +191,10 @@ test("dashboard list queries return products at the inclusive cutoff and exclude
   assert.deepEqual(allSources.map((product) => product.id), ["fresh"]);
   assert.deepEqual(sourceFiltered.map((product) => product.id), ["fresh"]);
   assert.equal(queryCalls.length, 2);
-  for (const call of queryCalls) assertFreshnessQuery(call.query, call.values, 24);
+  for (const call of queryCalls) {
+    assertFreshnessQuery(call.query, call.values, 24);
+    assert.match(call.query, /\$parameter::text IS NULL/);
+  }
 });
 
 test("dashboard freshness windows include only products inside their rolling SQL cutoffs", async () => {
@@ -256,6 +259,7 @@ test("dashboard brand filtering is exact and composes with Watchlist and sort", 
 
   assert.deepEqual(result.map((product) => product.id), ["exact-watched"]);
   assert.match(queryCalls[0]!.query, /p\.brand = \$parameter/);
+  assert.match(queryCalls[0]!.query, /\$parameter::text IS NULL/);
   assert.ok(queryCalls[0]!.values.includes("Mango"));
   assert.ok(queryCalls[0]!.values.includes("newest"));
 });
@@ -490,5 +494,6 @@ test("the highlighted-product fallback respects the selected source", async () =
   assert.deepEqual(result, []);
   assert.equal(queryCalls.length, 2);
   assert.match(queryCalls[1]?.query ?? "", /p\.source = \$parameter/);
+  assert.match(queryCalls[1]?.query ?? "", /\$parameter::text IS NULL/);
   assert.ok(queryCalls[1]?.values.includes("vinted.com"));
 });
