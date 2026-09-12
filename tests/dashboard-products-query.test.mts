@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getCurrentZalandoBrands,
   getLatestDashboardProducts,
   snapshotSummaryFields,
   snapshotSummaryJoin,
@@ -10,6 +11,7 @@ type ProductRow = {
   id: string;
   lastSeenAt: string;
   source?: string;
+  brand?: string | null;
   hidden?: boolean;
   watched?: boolean;
   observationCount?: number;
@@ -49,6 +51,22 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
     return [];
   }
 
+  if (query.includes("SELECT DISTINCT p.brand")) {
+    queryCalls.push({ query, values, products: listProducts });
+    const freshnessHours = values.find(
+      (value): value is number => value === 24 || value === 168,
+    )!;
+    return [...new Set(
+      listProducts
+        .filter((product) => product.source === "zalando.dk")
+        .filter((product) => isFresh(product, freshnessHours))
+        .map((product) => product.brand)
+        .filter((brand): brand is string => Boolean(brand?.trim())),
+    )]
+      .sort((left, right) => left.localeCompare(right))
+      .map((brand) => ({ brand }));
+  }
+
   const products = query.includes("WHERE p.id =")
     ? highlightedProducts
     : listProducts;
@@ -72,14 +90,26 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
     ? freshProducts.filter((product) => product.source === source)
     : freshProducts;
 
+  const brand = query.includes("p.brand =")
+    ? values.find(
+        (value): value is string =>
+          typeof value === "string" &&
+          !value.includes(".") &&
+          ["best_match", "best_deal", "newest"].every((sort) => value !== sort),
+      )
+    : undefined;
+  const brandFilteredProducts = brand
+    ? sourceFilteredProducts.filter((product) => product.brand === brand)
+    : sourceFilteredProducts;
+
   const highlightedViewFilteredProducts = query.includes("OR p.watched = TRUE")
-    ? sourceFilteredProducts.filter((product) => {
+    ? brandFilteredProducts.filter((product) => {
         const allowAnyProduct = values.find(
           (value): value is boolean => typeof value === "boolean",
         );
         return allowAnyProduct || product.watched === true;
       })
-    : sourceFilteredProducts;
+    : brandFilteredProducts;
 
   const viewFilteredProducts = query.includes("AND p.watched = TRUE")
     ? highlightedViewFilteredProducts.filter((product) => {
@@ -192,6 +222,65 @@ test("dashboard freshness windows include only products inside their rolling SQL
   ]);
   assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
   assertFreshnessQuery(queryCalls[1]!.query, queryCalls[1]!.values, 168);
+});
+
+test("current Zalando brands are distinct, alphabetical, non-empty, and fresh", async () => {
+  reset();
+  listProducts = [
+    { id: "mango", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango" },
+    { id: "acne-one", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Acne Studios" },
+    { id: "acne-two", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Acne Studios" },
+    { id: "empty", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "  " },
+    { id: "null", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: null },
+    { id: "vinted", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Vinted Brand" },
+    { id: "stale", lastSeenAt: new Date(cutoff.getTime() - 1).toISOString(), source: "zalando.dk", brand: "Stale Brand" },
+  ];
+
+  assert.deepEqual(await getCurrentZalandoBrands(sql, "24h"), ["Acne Studios", "Mango"]);
+  assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
+  assert.match(queryCalls[0]!.query, /p\.source = 'zalando\.dk'/);
+});
+
+test("dashboard brand filtering is exact and composes with Watchlist and sort", async () => {
+  reset();
+  listProducts = [
+    { id: "exact-watched", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango", watched: true },
+    { id: "different-case", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "MANGO", watched: true },
+    { id: "different-brand", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango Man", watched: true },
+    { id: "not-watched", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango", watched: false },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql, "zalando.dk", "newest", "watchlist", "24h", null, "Mango",
+  );
+
+  assert.deepEqual(result.map((product) => product.id), ["exact-watched"]);
+  assert.match(queryCalls[0]!.query, /p\.brand = \$parameter/);
+  assert.ok(queryCalls[0]!.values.includes("Mango"));
+  assert.ok(queryCalls[0]!.values.includes("newest"));
+});
+
+test("an invalid brand returns no products without affecting unfiltered behavior", async () => {
+  reset();
+  listProducts = [{ id: "mango", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango" }];
+
+  const unfiltered = await getLatestDashboardProducts(sql, "zalando.dk", "best_match", "visible", "24h", null);
+  const invalidBrand = await getLatestDashboardProducts(sql, "zalando.dk", "best_match", "visible", "24h", null, "Missing");
+
+  assert.deepEqual(unfiltered.map((product) => product.id), ["mango"]);
+  assert.deepEqual(invalidBrand, []);
+});
+
+test("a brand supplied with Vinted is ignored", async () => {
+  reset();
+  listProducts = [{ id: "vinted", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Any Brand" }];
+
+  const result = await getLatestDashboardProducts(
+    sql, "vinted.com", "best_match", "visible", "24h", null, "Mango",
+  );
+
+  assert.deepEqual(result.map((product) => product.id), ["vinted"]);
+  assert.ok(!queryCalls[0]!.values.includes("Mango"));
 });
 
 test("dashboard queries include SQL snapshot aggregates for count and minimum price", () => {

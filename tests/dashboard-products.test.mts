@@ -9,6 +9,7 @@ import {
   dashboardSourceFilters,
   parseDashboardSource,
 } from "../lib/dashboard-source.mts";
+import { parseDashboardBrand } from "../lib/dashboard-brand.mts";
 import {
   dashboardFreshnessOptions,
   parseDashboardFreshness,
@@ -49,6 +50,14 @@ test("parseDashboardSource accepts Vinted and Zalando", () => {
 test("parseDashboardSource defaults unsupported sources to All", () => {
   assert.equal(parseDashboardSource("scarosso.com"), null);
   assert.equal(parseDashboardSource("unsupported.example"), null);
+});
+
+test("dashboard brands are accepted only for Zalando", () => {
+  assert.equal(parseDashboardBrand("Mango", "zalando.dk"), "Mango");
+  assert.equal(parseDashboardBrand("Mango", "vinted.com"), null);
+  assert.equal(parseDashboardBrand("Mango", null), null);
+  assert.equal(parseDashboardBrand("", "zalando.dk"), null);
+  assert.equal(parseDashboardBrand(["Mango"], "zalando.dk"), null);
 });
 
 test("parseProductId accepts positive PostgreSQL BIGINT product IDs", () => {

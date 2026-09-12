@@ -35,6 +35,25 @@ export type DashboardSql = (
   strings: TemplateStringsArray,
   ...values: unknown[]
 ) => Promise<unknown[]>;
+
+export async function getCurrentZalandoBrands(
+  sql: DashboardSql,
+  freshness: DashboardFreshness,
+) {
+  const freshnessHours = dashboardFreshnessHours(freshness);
+  const rows = await sql`
+    SELECT DISTINCT p.brand AS brand
+    FROM products p
+    WHERE p.source = 'zalando.dk'
+      AND p.brand IS NOT NULL
+      AND TRIM(p.brand) <> ''
+      AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
+    ORDER BY p.brand ASC
+  `;
+
+  return (rows as { brand: string }[]).map((row) => row.brand);
+}
+
 export async function getLatestDashboardProducts(
   sql: DashboardSql,
   source: string | null,
@@ -42,8 +61,10 @@ export async function getLatestDashboardProducts(
   view: DashboardView,
   freshness: DashboardFreshness,
   highlightedProductId: string | null,
+  brand: string | null = null,
 ) {
   const freshnessHours = dashboardFreshnessHours(freshness);
+  const selectedBrand = source === "zalando.dk" ? brand : null;
   const rows = source
     ? await sql`
         SELECT
@@ -75,6 +96,7 @@ export async function getLatestDashboardProducts(
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
+          AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
           AND (
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
@@ -124,6 +146,7 @@ export async function getLatestDashboardProducts(
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
           )
+          AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
           AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
           (pe.product_id IS NULL) ASC,
@@ -177,6 +200,7 @@ export async function getLatestDashboardProducts(
     ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}
       AND (${source} IS NULL OR p.source = ${source})
+      AND (${selectedBrand} IS NULL OR p.brand = ${selectedBrand})
       AND (${view !== "watchlist"} OR p.watched = TRUE)
       AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
   `;
