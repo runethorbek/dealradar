@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   getCurrentZalandoBrands,
+  getCurrentDashboardMonitors,
   getLatestDashboardProducts,
   snapshotSummaryFields,
   snapshotSummaryJoin,
@@ -17,6 +18,7 @@ type ProductRow = {
   observationCount?: number;
   lowestObservedPrice?: string | null;
   currency?: string | null;
+  rawData?: unknown;
 };
 
 type SnapshotRow = {
@@ -67,6 +69,32 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
       .map((brand) => ({ brand }));
   }
 
+  if (query.includes("SELECT DISTINCT monitor_value #>> '{}' AS monitor_id")) {
+    queryCalls.push({ query, values, products: listProducts });
+    const freshnessHours = values.find(
+      (value): value is number => value === 24 || value === 168,
+    )!;
+    const source = values.find(
+      (value): value is string => typeof value === "string" && value.includes("."),
+    );
+    const monitorIds = listProducts
+      .filter((product) => isFresh(product, freshnessHours))
+      .filter((product) => !source || product.source === source)
+      .flatMap((product) => {
+        const rawData = product.rawData;
+        return rawData && typeof rawData === "object" && !Array.isArray(rawData) &&
+            Array.isArray((rawData as { monitor_ids?: unknown }).monitor_ids)
+          ? (rawData as { monitor_ids: unknown[] }).monitor_ids
+          : [];
+      })
+      .filter((monitorId): monitorId is string =>
+        typeof monitorId === "string" && Boolean(monitorId.trim()),
+      );
+    return [...new Set(monitorIds)]
+      .sort((left, right) => left.localeCompare(right))
+      .map((monitor_id) => ({ monitor_id }));
+  }
+
   const products = query.includes("WHERE p.id =")
     ? highlightedProducts
     : listProducts;
@@ -95,6 +123,7 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
         (value): value is string =>
           typeof value === "string" &&
           !value.includes(".") &&
+          !value.startsWith("monitor-") &&
           ["best_match", "best_deal", "newest"].every((sort) => value !== sort),
       )
     : undefined;
@@ -102,14 +131,29 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
     ? sourceFilteredProducts.filter((product) => product.brand === brand)
     : sourceFilteredProducts;
 
-  const highlightedViewFilteredProducts = query.includes("OR p.watched = TRUE")
+  const monitor = query.includes("p.raw_data -> 'monitor_ids' ?")
+    ? values.find(
+        (value): value is string =>
+          typeof value === "string" && value.startsWith("monitor-"),
+      )
+    : undefined;
+  const monitorFilteredProducts = monitor
     ? brandFilteredProducts.filter((product) => {
+        const rawData = product.rawData;
+        return rawData && typeof rawData === "object" && !Array.isArray(rawData) &&
+          Array.isArray((rawData as { monitor_ids?: unknown }).monitor_ids) &&
+          (rawData as { monitor_ids: unknown[] }).monitor_ids.includes(monitor);
+      })
+    : brandFilteredProducts;
+
+  const highlightedViewFilteredProducts = query.includes("OR p.watched = TRUE")
+    ? monitorFilteredProducts.filter((product) => {
         const allowAnyProduct = values.find(
           (value): value is boolean => typeof value === "boolean",
         );
         return allowAnyProduct || product.watched === true;
       })
-    : brandFilteredProducts;
+    : monitorFilteredProducts;
 
   const viewFilteredProducts = query.includes("AND p.watched = TRUE")
     ? highlightedViewFilteredProducts.filter((product) => {
@@ -122,7 +166,7 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
       })
     : highlightedViewFilteredProducts;
 
-  return viewFilteredProducts.map((product) => {
+  const result = viewFilteredProducts.map((product) => {
     const validSnapshots = snapshots
       .filter((snapshot) => snapshot.productId === product.id)
       .filter(
@@ -143,6 +187,14 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
           : null,
     };
   });
+
+  const sort = values.find(
+    (value): value is "best_match" | "best_deal" | "newest" =>
+      value === "best_match" || value === "best_deal" || value === "newest",
+  );
+  return sort === "newest"
+    ? result.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+    : result;
 }
 
 function reset() {
@@ -242,6 +294,57 @@ test("current Zalando brands are distinct, alphabetical, non-empty, and fresh", 
   assert.deepEqual(await getCurrentZalandoBrands(sql, "24h"), ["Acne Studios", "Mango"]);
   assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
   assert.match(queryCalls[0]!.query, /p\.source = 'zalando\.dk'/);
+});
+
+test("current dashboard monitors use fresh, source-aware JSONB arrays only", async () => {
+  reset();
+  listProducts = [
+    { id: "none", lastSeenAt: cutoff.toISOString(), source: "vinted.com" },
+    { id: "one", lastSeenAt: cutoff.toISOString(), source: "vinted.com", rawData: { monitor_ids: ["monitor-alpha"] } },
+    { id: "many", lastSeenAt: cutoff.toISOString(), source: "vinted.com", rawData: { monitor_ids: ["monitor-beta", "monitor-alpha", "", 7, null, true, {}, []] } },
+    { id: "malformed", lastSeenAt: cutoff.toISOString(), source: "vinted.com", rawData: { monitor_ids: "monitor-ignored" } },
+    { id: "zalando", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", rawData: { monitor_ids: ["monitor-zalando"] } },
+    { id: "seven-days", lastSeenAt: new Date(cutoff.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(), source: "vinted.com", rawData: { monitor_ids: ["monitor-week"] } },
+  ];
+
+  assert.deepEqual(await getCurrentDashboardMonitors(sql, "vinted.com", "24h"), ["monitor-alpha", "monitor-beta"]);
+  assert.deepEqual(await getCurrentDashboardMonitors(sql, "vinted.com", "7d"), ["monitor-alpha", "monitor-beta", "monitor-week"]);
+  assert.deepEqual(await getCurrentDashboardMonitors(sql, "zalando.dk", "24h"), ["monitor-zalando"]);
+  assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
+  assertFreshnessQuery(queryCalls[1]!.query, queryCalls[1]!.values, 168);
+  assert.match(queryCalls[0]!.query, /jsonb_typeof\(p\.raw_data -> 'monitor_ids'\) = 'array'/);
+  assert.match(queryCalls[0]!.query, /jsonb_typeof\(monitor_value\) = 'string'/);
+  assert.match(queryCalls[0]!.query, /BTRIM\(monitor_value #>> '\{\}'\) <> ''/);
+});
+
+test("dashboard monitor filtering is exact and composes with source, freshness, views, sort, and brand", async () => {
+  reset();
+  listProducts = [
+    { id: "week-old", lastSeenAt: new Date(cutoff.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(), source: "vinted.com", rawData: { monitor_ids: ["monitor-alpha"] } },
+    { id: "vinted-watched", lastSeenAt: cutoff.toISOString(), source: "vinted.com", watched: true, rawData: { monitor_ids: ["monitor-alpha", "monitor-beta"] } },
+    { id: "vinted-hidden", lastSeenAt: cutoff.toISOString(), source: "vinted.com", hidden: true, rawData: { monitor_ids: ["monitor-alpha"] } },
+    { id: "zalando-brand", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango", rawData: { monitor_ids: ["monitor-alpha"] } },
+    { id: "different-monitor", lastSeenAt: cutoff.toISOString(), source: "vinted.com", rawData: { monitor_ids: ["monitor-gamma"] } },
+  ];
+
+  const watchlist = await getLatestDashboardProducts(sql, "vinted.com", "newest", "watchlist", "24h", null, null, "monitor-alpha");
+  const hidden = await getLatestDashboardProducts(sql, "vinted.com", "best_match", "hidden", "24h", null, null, "monitor-alpha");
+  const brand = await getLatestDashboardProducts(sql, "zalando.dk", "best_deal", "visible", "24h", null, "Mango", "monitor-alpha");
+  const sevenDays = await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "7d", null, null, "monitor-alpha");
+  const newest = await getLatestDashboardProducts(sql, "vinted.com", "newest", "visible", "7d", null, null, "monitor-alpha");
+  const invalid = await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null, null, "monitor-missing");
+  const unfiltered = await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null);
+
+  assert.deepEqual(watchlist.map((product) => product.id), ["vinted-watched"]);
+  assert.deepEqual(hidden.map((product) => product.id), ["vinted-hidden"]);
+  assert.deepEqual(brand.map((product) => product.id), ["zalando-brand"]);
+  assert.deepEqual(sevenDays.map((product) => product.id), ["week-old", "vinted-watched"]);
+  assert.deepEqual(newest.map((product) => product.id), ["vinted-watched", "week-old"]);
+  assert.deepEqual(invalid, []);
+  assert.deepEqual(unfiltered.map((product) => product.id), ["vinted-watched", "different-monitor"]);
+  for (const call of queryCalls.slice(0, 5)) {
+    assert.match(call.query, /p\.raw_data -> 'monitor_ids' \? \$parameter/);
+  }
 });
 
 test("dashboard brand filtering is exact and composes with Watchlist and sort", async () => {
@@ -496,4 +599,30 @@ test("the highlighted-product fallback respects the selected source", async () =
   assert.match(queryCalls[1]?.query ?? "", /p\.source = \$parameter/);
   assert.match(queryCalls[1]?.query ?? "", /\$parameter::text IS NULL/);
   assert.ok(queryCalls[1]?.values.includes("vinted.com"));
+});
+
+test("the highlighted-product fallback respects the selected monitor", async () => {
+  reset();
+  highlightedProducts = [{
+    id: "different-monitor",
+    lastSeenAt: cutoff.toISOString(),
+    source: "vinted.com",
+    rawData: { monitor_ids: ["monitor-beta"] },
+  }];
+
+  const result = await getLatestDashboardProducts(
+    sql,
+    "vinted.com",
+    "best_match",
+    "visible",
+    "24h",
+    "different-monitor",
+    null,
+    "monitor-alpha",
+  );
+
+  assert.deepEqual(result, []);
+  assert.equal(queryCalls.length, 2);
+  assert.match(queryCalls[1]?.query ?? "", /p\.raw_data -> 'monitor_ids' \? \$parameter/);
+  assert.ok(queryCalls[1]?.values.includes("monitor-alpha"));
 });

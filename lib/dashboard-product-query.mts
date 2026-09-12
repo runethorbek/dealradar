@@ -54,6 +54,32 @@ export async function getCurrentZalandoBrands(
   return (rows as { brand: string }[]).map((row) => row.brand);
 }
 
+export async function getCurrentDashboardMonitors(
+  sql: DashboardSql,
+  source: string | null,
+  freshness: DashboardFreshness,
+) {
+  const freshnessHours = dashboardFreshnessHours(freshness);
+  const rows = await sql`
+    SELECT DISTINCT monitor_value #>> '{}' AS monitor_id
+    FROM products p
+    CROSS JOIN LATERAL jsonb_array_elements(
+      CASE
+        WHEN jsonb_typeof(p.raw_data -> 'monitor_ids') = 'array'
+        THEN p.raw_data -> 'monitor_ids'
+        ELSE '[]'::jsonb
+      END
+    ) AS monitor_value
+    WHERE p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
+      AND (${source}::text IS NULL OR p.source = ${source})
+      AND jsonb_typeof(monitor_value) = 'string'
+      AND BTRIM(monitor_value #>> '{}') <> ''
+    ORDER BY monitor_value #>> '{}' ASC
+  `;
+
+  return (rows as { monitor_id: string }[]).map((row) => row.monitor_id);
+}
+
 export async function getLatestDashboardProducts(
   sql: DashboardSql,
   source: string | null,
@@ -62,6 +88,7 @@ export async function getLatestDashboardProducts(
   freshness: DashboardFreshness,
   highlightedProductId: string | null,
   brand: string | null = null,
+  monitor: string | null = null,
 ) {
   const freshnessHours = dashboardFreshnessHours(freshness);
   const selectedBrand = source === "zalando.dk" ? brand : null;
@@ -97,6 +124,7 @@ export async function getLatestDashboardProducts(
         ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
           AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
+          AND (${monitor}::text IS NULL OR p.raw_data -> 'monitor_ids' ? ${monitor})
           AND (
             (${view === "watchlist"} AND p.watched = TRUE)
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
@@ -147,6 +175,7 @@ export async function getLatestDashboardProducts(
             OR (${view !== "watchlist"} AND p.hidden = ${view === "hidden"})
           )
           AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
+          AND (${monitor}::text IS NULL OR p.raw_data -> 'monitor_ids' ? ${monitor})
           AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
           (pe.product_id IS NULL) ASC,
@@ -201,6 +230,7 @@ export async function getLatestDashboardProducts(
     WHERE p.id = ${highlightedProductId}
       AND (${source} IS NULL OR p.source = ${source})
       AND (${selectedBrand}::text IS NULL OR p.brand = ${selectedBrand})
+      AND (${monitor}::text IS NULL OR p.raw_data -> 'monitor_ids' ? ${monitor})
       AND (${view !== "watchlist"} OR p.watched = TRUE)
       AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
   `;

@@ -14,6 +14,7 @@ import {
   dashboardFreshnessOptions,
   parseDashboardFreshness,
 } from "../lib/dashboard-freshness.mts";
+import { parseDashboardMonitor } from "../lib/dashboard-monitor.mts";
 
 test("dashboard freshness defaults to Last 24 hours and accepts both supported windows", () => {
   assert.equal(parseDashboardFreshness(undefined), "24h");
@@ -58,6 +59,12 @@ test("dashboard brands are accepted only for Zalando", () => {
   assert.equal(parseDashboardBrand("Mango", null), null);
   assert.equal(parseDashboardBrand("", "zalando.dk"), null);
   assert.equal(parseDashboardBrand(["Mango"], "zalando.dk"), null);
+});
+
+test("dashboard monitor accepts a single non-empty raw monitor ID", () => {
+  assert.equal(parseDashboardMonitor("vinted-mens-blazers-size-s"), "vinted-mens-blazers-size-s");
+  assert.equal(parseDashboardMonitor(""), null);
+  assert.equal(parseDashboardMonitor(["vinted-mens-blazers-size-s"]), null);
 });
 
 test("parseProductId accepts positive PostgreSQL BIGINT product IDs", () => {

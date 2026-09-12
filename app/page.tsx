@@ -16,6 +16,7 @@ import {
 import {
   getLatestDashboardProducts,
   getCurrentZalandoBrands,
+  getCurrentDashboardMonitors,
   type DashboardSort,
   type DashboardSql,
 } from "@/lib/dashboard-product-query.mts";
@@ -25,6 +26,7 @@ import {
   type DashboardFreshness,
 } from "@/lib/dashboard-freshness.mts";
 import { parseDashboardBrand } from "@/lib/dashboard-brand.mts";
+import { parseDashboardMonitor } from "@/lib/dashboard-monitor.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
 import { AppNavigation } from "./navigation";
 
@@ -49,6 +51,7 @@ function getDashboardHref(
   view: DashboardView,
   freshness: DashboardFreshness,
   brand: string | null,
+  monitor: string | null,
   highlightedProductId?: string | null,
 ) {
   const params = new URLSearchParams();
@@ -73,6 +76,10 @@ function getDashboardHref(
     params.set("brand", brand);
   }
 
+  if (monitor) {
+    params.set("monitor", monitor);
+  }
+
   if (highlightedProductId) {
     params.set("product", highlightedProductId);
   }
@@ -87,6 +94,7 @@ async function getLatestProducts(
   view: DashboardView,
   freshness: DashboardFreshness,
   brand: string | null,
+  monitor: string | null,
   highlightedProductId: string | null,
 ) {
   await connection();
@@ -94,7 +102,7 @@ async function getLatestProducts(
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], monitors: [] as string[], failed: true };
   }
 
   try {
@@ -109,14 +117,16 @@ async function getLatestProducts(
         freshness,
         highlightedProductId,
         brand,
+        monitor,
       ),
       brands: source === "zalando.dk"
         ? await getCurrentZalandoBrands(dashboardSql, freshness)
         : [],
+      monitors: await getCurrentDashboardMonitors(dashboardSql, source, freshness),
       failed: false,
     };
   } catch {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], monitors: [] as string[], failed: true };
   }
 }
 
@@ -130,17 +140,19 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   const highlightedProductId = parseProductId(query.product);
   const selectedSource = parseDashboardSource(requestedSource);
   const selectedBrand = parseDashboardBrand(query.brand, selectedSource);
+  const selectedMonitor = parseDashboardMonitor(query.monitor);
   const selectedSort = sortOptions.some(
     (option) => option.value === requestedSort,
   )
     ? (requestedSort as Sort)
     : "best_match";
-  const { products, brands, failed } = await getLatestProducts(
+  const { products, brands, monitors, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
     selectedView,
     selectedFreshness,
     selectedBrand,
+    selectedMonitor,
     highlightedProductId,
   );
 
@@ -155,6 +167,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           selectedView,
           selectedFreshness,
           selectedBrand,
+          selectedMonitor,
           highlightedProductId,
         )}
       />
@@ -194,6 +207,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     option.value,
                     selectedFreshness,
                     selectedBrand,
+                    selectedMonitor,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -227,6 +241,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     selectedView,
                     selectedFreshness,
                     null,
+                    selectedMonitor,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -260,6 +275,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     selectedView,
                     option.value,
                     selectedBrand,
+                    selectedMonitor,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -282,6 +298,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               {selectedSort !== "best_match" ? <input type="hidden" name="sort" value={selectedSort} /> : null}
               {selectedView !== "visible" ? <input type="hidden" name="view" value={selectedView} /> : null}
               {selectedFreshness !== "24h" ? <input type="hidden" name="freshness" value={selectedFreshness} /> : null}
+              {selectedMonitor ? <input type="hidden" name="monitor" value={selectedMonitor} /> : null}
               <input type="hidden" name="source" value="zalando.dk" />
               <select
                 aria-label="Filter deals by brand"
@@ -292,6 +309,33 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                 <option value="">All brands</option>
                 {brands.map((brand) => (
                   <option key={brand} value={brand}>{brand}</option>
+                ))}
+              </select>
+              <button type="submit" className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-600 hover:border-zinc-300 hover:text-zinc-950">
+                Apply
+              </button>
+            </form>
+          ) : null}
+
+          {monitors.length > 0 ? (
+            <form action="/" method="get" className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
+                Monitor
+              </span>
+              {selectedSort !== "best_match" ? <input type="hidden" name="sort" value={selectedSort} /> : null}
+              {selectedView !== "visible" ? <input type="hidden" name="view" value={selectedView} /> : null}
+              {selectedFreshness !== "24h" ? <input type="hidden" name="freshness" value={selectedFreshness} /> : null}
+              {selectedSource ? <input type="hidden" name="source" value={selectedSource} /> : null}
+              {selectedBrand ? <input type="hidden" name="brand" value={selectedBrand} /> : null}
+              <select
+                aria-label="Filter deals by monitor"
+                name="monitor"
+                defaultValue={selectedMonitor ?? ""}
+                className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-600"
+              >
+                <option value="">All monitors</option>
+                {monitors.map((monitor) => (
+                  <option key={monitor} value={monitor}>{monitor}</option>
                 ))}
               </select>
               <button type="submit" className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-600 hover:border-zinc-300 hover:text-zinc-950">
@@ -319,6 +363,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                     selectedView,
                     selectedFreshness,
                     selectedBrand,
+                    selectedMonitor,
                   )}
                   aria-current={isActive ? "page" : undefined}
                   className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -362,6 +407,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                   selectedView,
                   selectedFreshness,
                   selectedBrand,
+                  selectedMonitor,
                   product.id,
                 )}
               />
