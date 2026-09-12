@@ -13,6 +13,9 @@ let persistenceCalls = 0;
 let geminiClientCalls = 0;
 let geminiRequestCalls = 0;
 let geminiContents = "";
+let geminiSystemInstruction = "";
+let productSource = "vinted.com";
+let productRawData: unknown = {};
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -39,7 +42,11 @@ mockModule("@neondatabase/serverless", {
       const query = strings.join(" ");
 
       if (query.includes("FROM products")) {
-        return [{ title: "Test product" }];
+        return [{
+          source: productSource,
+          rawData: productRawData,
+          title: "Test product",
+        }];
       }
 
       if (query.includes("FROM preferences")) return [];
@@ -61,9 +68,16 @@ mockModule("@neondatabase/serverless", {
 mockModule("@google/genai", {
   GoogleGenAI: class {
     models = {
-      generateContent: async ({ contents }: { contents: string }) => {
+      generateContent: async ({
+        contents,
+        config,
+      }: {
+        contents: string;
+        config: { systemInstruction: string };
+      }) => {
         geminiRequestCalls += 1;
         geminiContents = contents;
+        geminiSystemInstruction = config.systemInstruction;
         return {
           text: JSON.stringify({
             preferenceScore: 8,
@@ -101,6 +115,19 @@ function reset(nextSession: typeof session) {
   geminiClientCalls = 0;
   geminiRequestCalls = 0;
   geminiContents = "";
+  geminiSystemInstruction = "";
+  productSource = "vinted.com";
+  productRawData = {};
+}
+
+function getEvaluationContext() {
+  const contextPrefix = "Context:\n";
+  const contextStart = geminiContents.indexOf(contextPrefix);
+
+  assert.notEqual(contextStart, -1);
+  return JSON.parse(geminiContents.slice(contextStart + contextPrefix.length)) as {
+    product: Record<string, unknown>;
+  };
 }
 
 function evaluationRequest(body = JSON.stringify({ productId: "42" })) {
@@ -151,6 +178,12 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
   assert.equal(geminiClientCalls, 1);
   assert.equal(geminiRequestCalls, 1);
   assert.doesNotMatch(geminiContents, /targetSize|target_size|category/i);
+  assert.match(geminiSystemInstruction, /matchedMonitors/);
+  assert.match(
+    geminiSystemInstruction,
+    /do not treat monitor IDs as authoritative product attributes/i,
+  );
+  assert.equal(getEvaluationContext().product.source, "vinted.com");
   assert.deepEqual(await response.json(), {
     success: true,
     evaluation: {
@@ -161,4 +194,71 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
       evaluatedAt: "2026-08-30T12:00:00.000Z",
     },
   });
+});
+
+test("includes one Vinted monitor ID as matched monitor context", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  productRawData = { monitor_ids: ["vinted-mens-blazers-size-s"] };
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiRequestCalls, 1);
+  assert.deepEqual(getEvaluationContext().product.matchedMonitors, [
+    "vinted-mens-blazers-size-s",
+  ]);
+});
+
+test("includes multiple Vinted monitor IDs as matched monitor context", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  productRawData = {
+    monitor_ids: [
+      "vinted-mens-blazers-size-s",
+      "vinted-men-pants-size-46",
+    ],
+  };
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiRequestCalls, 1);
+  assert.deepEqual(getEvaluationContext().product.matchedMonitors, [
+    "vinted-mens-blazers-size-s",
+    "vinted-men-pants-size-46",
+  ]);
+});
+
+test("omits matched monitor context when Vinted metadata is unavailable", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiRequestCalls, 1);
+  assert.equal("matchedMonitors" in getEvaluationContext().product, false);
+});
+
+test("excludes invalid and excessive Vinted monitor IDs from evaluation context", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  productRawData = {
+    monitor_ids: [
+      "vinted-mens-blazers-size-s",
+      "not a monitor ID",
+      "x".repeat(121),
+      ...Array.from({ length: 20 }, (_, index) => `vinted-monitor-${index}`),
+    ],
+  };
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(geminiRequestCalls, 1);
+  assert.deepEqual(getEvaluationContext().product.matchedMonitors, [
+    "vinted-mens-blazers-size-s",
+    ...Array.from({ length: 19 }, (_, index) => `vinted-monitor-${index}`),
+  ]);
 });

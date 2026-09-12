@@ -41,6 +41,8 @@ listing filter currently permits DealRadar to treat the product as available.
 
 The original product object is retained as `raw_data` for diagnostics and
 future migrations. This is not a substitute for normalized application fields.
+For Vinted, evaluation may read `monitor_ids` from this preserved object as
+non-authoritative discovery context; it is not duplicated into a product field.
 
 ## Application normalization and persistence
 

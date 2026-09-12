@@ -264,6 +264,7 @@ Instead, each evaluation can receive context from DealRadar, including:
 - preference profile
 - recent likes/dislikes
 - product price history
+- matched Vinted monitor IDs, when present, as non-authoritative discovery context
 ```
 
 Gemini returns structured output similar to:
