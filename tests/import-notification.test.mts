@@ -201,7 +201,7 @@ test("retries a rate-limited candidate before evaluating the next candidate", as
   );
 
   assert.deepEqual(calls, ["one", "one", "two"]);
-  assert.deepEqual(delays, [5_000, 5_000]);
+  assert.deepEqual(delays, [5_000]);
   assert.equal(evaluatedProducts.length, 2);
   assert.deepEqual(metrics, {
     candidatesSelected: 2,
@@ -217,7 +217,7 @@ test("retries a rate-limited candidate before evaluating the next candidate", as
   });
 });
 
-test("paces successful candidate evaluations", async () => {
+test("does not delay between successful candidate evaluations", async () => {
   const delays: number[] = [];
   const { evaluatedProducts } = await evaluateCandidates(
     [
@@ -230,7 +230,7 @@ test("paces successful candidate evaluations", async () => {
   );
 
   assert.equal(evaluatedProducts.length, 3);
-  assert.deepEqual(delays, [5_000, 5_000]);
+  assert.deepEqual(delays, []);
 });
 
 test("continues after a candidate exhausts retries", async () => {
@@ -251,7 +251,7 @@ test("continues after a candidate exhausts retries", async () => {
   );
 
   assert.deepEqual(calls, ["one", "one", "one", "one", "two"]);
-  assert.deepEqual(delays, [5_000, 10_000, 20_000, 5_000]);
+  assert.deepEqual(delays, [5_000, 10_000, 20_000]);
   assert.equal(evaluatedProducts.length, 1);
   assert.equal(metrics.failedEvaluations, 1);
   assert.equal(metrics.retryAttempts, 3);

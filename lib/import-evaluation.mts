@@ -42,7 +42,6 @@ type EvaluateCandidate = (
 const automaticEvaluationLimit = 50;
 const maximumEvaluationRetries = 3;
 const retryDelaysMs = [5_000, 10_000, 20_000];
-const candidatePacingDelayMs = 5_000;
 
 export type EvaluationMetrics = {
   candidatesSelected: number;
@@ -232,7 +231,7 @@ export async function evaluateCandidates(
   const evaluated: ImportRecommendation[] = [];
   const sleep = options.sleep ?? defaultSleep;
 
-  for (const [candidateIndex, candidate] of candidates.entries()) {
+  for (const candidate of candidates) {
     let retries = 0;
 
     while (true) {
@@ -287,10 +286,6 @@ export async function evaluateCandidates(
         }
         break;
       }
-    }
-
-    if (candidateIndex < candidates.length - 1) {
-      await sleep(candidatePacingDelayMs);
     }
   }
 
