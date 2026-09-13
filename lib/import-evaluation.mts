@@ -115,6 +115,20 @@ function isQuotaLikeGeminiFailure(error: unknown) {
   );
 }
 
+function getFailureMessageCategory(error: unknown) {
+  const message = getErrorMessage(error).toLowerCase();
+
+  if (message.includes("invalid evaluation")) {
+    return "invalid_evaluation";
+  }
+
+  if (message.includes("product not found")) {
+    return "product_not_found";
+  }
+
+  return getErrorStatus(error) === null ? "unexpected_error" : "provider_error";
+}
+
 function compareNullableNumbersDescending(
   leftValue: string | null,
   rightValue: string | null,
@@ -284,6 +298,14 @@ export async function evaluateCandidates(
         } else {
           metrics.permanentFailures += 1;
         }
+        console.warn("DealRadar automatic evaluation failed.", {
+          productId: candidate.productId,
+          failureKind: kind,
+          status: getErrorStatus(error),
+          attempt: retries + 1,
+          retriesUsed: retries,
+          messageCategory: getFailureMessageCategory(error),
+        });
         break;
       }
     }

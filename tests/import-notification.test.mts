@@ -261,20 +261,41 @@ test("continues after a candidate exhausts retries", async () => {
 
 test("does not retry permanent Gemini failures", async () => {
   let calls = 0;
-  const { metrics } = await evaluateCandidates(
-    [evaluationCandidate("one")],
-    async () => {
-      calls += 1;
-      const error = new Error("invalid request");
-      Object.assign(error, { status: 400 });
-      throw error;
-    },
-    { sleep: async () => {} },
-  );
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...values) => warnings.push(values);
 
-  assert.equal(calls, 1);
-  assert.equal(metrics.failedEvaluations, 1);
-  assert.equal(metrics.retryAttempts, 0);
+  try {
+    const { metrics } = await evaluateCandidates(
+      [evaluationCandidate("one")],
+      async () => {
+        calls += 1;
+        const error = new Error("invalid request");
+        Object.assign(error, { status: 400 });
+        throw error;
+      },
+      { sleep: async () => {} },
+    );
+
+    assert.equal(calls, 1);
+    assert.equal(metrics.failedEvaluations, 1);
+    assert.equal(metrics.retryAttempts, 0);
+    assert.deepEqual(warnings, [
+      [
+        "DealRadar automatic evaluation failed.",
+        {
+          productId: "one",
+          failureKind: "permanent",
+          status: 400,
+          attempt: 1,
+          retriesUsed: 0,
+          messageCategory: "provider_error",
+        },
+      ],
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test("retries quota-like HTTP 429 responses", async () => {
