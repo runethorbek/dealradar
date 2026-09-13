@@ -41,7 +41,8 @@ type EvaluateCandidate = (
 
 const automaticEvaluationLimit = 50;
 const maximumEvaluationRetries = 3;
-const retryDelaysMs = [1_000, 2_000, 4_000];
+const retryDelaysMs = [5_000, 10_000, 20_000];
+const candidatePacingDelayMs = 5_000;
 
 export type EvaluationMetrics = {
   candidatesSelected: number;
@@ -52,6 +53,7 @@ export type EvaluationMetrics = {
   retryableFailures: number;
   rateLimitFailures: number;
   quotaFailures: number;
+  permanentFailures: number;
   exhaustedRetries: number;
 };
 
@@ -60,11 +62,11 @@ export type CandidateEvaluationRun = {
   metrics: EvaluationMetrics;
 };
 
-type RetryOptions = {
+type EvaluationOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-type EvaluationFailureKind = "rate_limit" | "transient" | "quota" | "permanent";
+type EvaluationFailureKind = "rate_limit" | "transient" | "permanent";
 
 function defaultSleep(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -91,12 +93,12 @@ export function classifyGeminiEvaluationFailure(
   error: unknown,
 ): EvaluationFailureKind {
   const status = getErrorStatus(error);
-  const message = getErrorMessage(error).toLowerCase();
-  const indicatesPersistentQuota =
-    /(?:daily|per day|limit:\s*0|billing|credit|payment)/.test(message);
 
   if (status === 429) {
-    return indicatesPersistentQuota ? "quota" : "rate_limit";
+    // The SDK exposes HTTP status directly but keeps provider error details in
+    // the message. RESOURCE_EXHAUSTED and quota wording do not establish that
+    // the limit cannot recover after a short wait, so retry all HTTP 429s.
+    return "rate_limit";
   }
 
   if (status === 408 || (status !== null && status >= 500 && status <= 599)) {
@@ -104,6 +106,14 @@ export function classifyGeminiEvaluationFailure(
   }
 
   return "permanent";
+}
+
+function isQuotaLikeGeminiFailure(error: unknown) {
+  const message = getErrorMessage(error).toLowerCase();
+
+  return /(?:quota|daily|per day|limit:\s*0|billing|credit|payment)/.test(
+    message,
+  );
 }
 
 function compareNullableNumbersDescending(
@@ -200,7 +210,7 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
 export async function evaluateCandidates(
   candidates: EvaluationCandidate[],
   evaluateCandidate: EvaluateCandidate | null,
-  options: RetryOptions = {},
+  options: EvaluationOptions = {},
 ): Promise<CandidateEvaluationRun> {
   const metrics: EvaluationMetrics = {
     candidatesSelected: candidates.length,
@@ -211,6 +221,7 @@ export async function evaluateCandidates(
     retryableFailures: 0,
     rateLimitFailures: 0,
     quotaFailures: 0,
+    permanentFailures: 0,
     exhaustedRetries: 0,
   };
 
@@ -221,7 +232,7 @@ export async function evaluateCandidates(
   const evaluated: ImportRecommendation[] = [];
   const sleep = options.sleep ?? defaultSleep;
 
-  for (const candidate of candidates) {
+  for (const [candidateIndex, candidate] of candidates.entries()) {
     let retries = 0;
 
     while (true) {
@@ -249,7 +260,8 @@ export async function evaluateCandidates(
 
         if (kind === "rate_limit") {
           metrics.rateLimitFailures += 1;
-        } else if (kind === "quota") {
+        }
+        if (isQuotaLikeGeminiFailure(error)) {
           metrics.quotaFailures += 1;
         }
 
@@ -270,9 +282,15 @@ export async function evaluateCandidates(
         metrics.failedEvaluations += 1;
         if (kind === "rate_limit" || kind === "transient") {
           metrics.exhaustedRetries += 1;
+        } else {
+          metrics.permanentFailures += 1;
         }
         break;
       }
+    }
+
+    if (candidateIndex < candidates.length - 1) {
+      await sleep(candidatePacingDelayMs);
     }
   }
 

@@ -259,6 +259,7 @@ test("preserves the import flow for a valid bearer credential", async () => {
       retryableFailures: 0,
       rateLimitFailures: 0,
       quotaFailures: 0,
+      permanentFailures: 0,
       exhaustedRetries: 0,
     },
   });

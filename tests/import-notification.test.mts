@@ -95,6 +95,7 @@ test("evaluates hidden and visible products before selecting a visible recommend
         dealScore: candidate.hidden ? 10 : 7,
       };
     },
+    { sleep: async () => {} },
   );
 
   assert.deepEqual(evaluatedProductIds.sort(), ["hidden", "visible"]);
@@ -133,6 +134,7 @@ test("returns no recommendation when every evaluated product is hidden", async (
       evaluationCount += 1;
       return { preferenceScore: 10, dealScore: 10 };
     },
+    { sleep: async () => {} },
   );
 
   assert.equal(evaluationCount, 1);
@@ -171,6 +173,7 @@ test("evaluates candidates sequentially", async () => {
       }
       return { preferenceScore: 8, dealScore: 7 };
     },
+    { sleep: async () => {} },
   );
 
   await Promise.resolve();
@@ -182,6 +185,7 @@ test("evaluates candidates sequentially", async () => {
 
 test("retries a rate-limited candidate before evaluating the next candidate", async () => {
   const calls: string[] = [];
+  const delays: number[] = [];
   const { evaluatedProducts, metrics } = await evaluateCandidates(
     [evaluationCandidate("one"), evaluationCandidate("two")],
     async (candidate) => {
@@ -193,10 +197,11 @@ test("retries a rate-limited candidate before evaluating the next candidate", as
       }
       return { preferenceScore: 8, dealScore: 7 };
     },
-    { sleep: async () => {} },
+    { sleep: async (milliseconds) => { delays.push(milliseconds); } },
   );
 
   assert.deepEqual(calls, ["one", "one", "two"]);
+  assert.deepEqual(delays, [5_000, 5_000]);
   assert.equal(evaluatedProducts.length, 2);
   assert.deepEqual(metrics, {
     candidatesSelected: 2,
@@ -207,12 +212,30 @@ test("retries a rate-limited candidate before evaluating the next candidate", as
     retryableFailures: 1,
     rateLimitFailures: 1,
     quotaFailures: 0,
+    permanentFailures: 0,
     exhaustedRetries: 0,
   });
 });
 
+test("paces successful candidate evaluations", async () => {
+  const delays: number[] = [];
+  const { evaluatedProducts } = await evaluateCandidates(
+    [
+      evaluationCandidate("one"),
+      evaluationCandidate("two"),
+      evaluationCandidate("three"),
+    ],
+    async () => ({ preferenceScore: 8, dealScore: 7 }),
+    { sleep: async (milliseconds) => { delays.push(milliseconds); } },
+  );
+
+  assert.equal(evaluatedProducts.length, 3);
+  assert.deepEqual(delays, [5_000, 5_000]);
+});
+
 test("continues after a candidate exhausts retries", async () => {
   const calls: string[] = [];
+  const delays: number[] = [];
   const { evaluatedProducts, metrics } = await evaluateCandidates(
     [evaluationCandidate("one"), evaluationCandidate("two")],
     async (candidate) => {
@@ -224,10 +247,11 @@ test("continues after a candidate exhausts retries", async () => {
       }
       return { preferenceScore: 8, dealScore: 7 };
     },
-    { sleep: async () => {} },
+    { sleep: async (milliseconds) => { delays.push(milliseconds); } },
   );
 
   assert.deepEqual(calls, ["one", "one", "one", "one", "two"]);
+  assert.deepEqual(delays, [5_000, 10_000, 20_000, 5_000]);
   assert.equal(evaluatedProducts.length, 1);
   assert.equal(metrics.failedEvaluations, 1);
   assert.equal(metrics.retryAttempts, 3);
@@ -253,22 +277,28 @@ test("does not retry permanent Gemini failures", async () => {
   assert.equal(metrics.retryAttempts, 0);
 });
 
-test("does not retry persistent quota exhaustion", async () => {
+test("retries quota-like HTTP 429 responses", async () => {
   let calls = 0;
+  const delays: number[] = [];
   const { metrics } = await evaluateCandidates(
     [evaluationCandidate("one")],
     async () => {
       calls += 1;
-      const error = new Error("Quota exceeded: daily limit: 0");
-      Object.assign(error, { status: 429 });
-      throw error;
+      if (calls < 3) {
+        const error = new Error("Quota exceeded: daily limit: 0");
+        Object.assign(error, { status: 429 });
+        throw error;
+      }
+      return { preferenceScore: 8, dealScore: 7 };
     },
-    { sleep: async () => {} },
+    { sleep: async (milliseconds) => { delays.push(milliseconds); } },
   );
 
-  assert.equal(calls, 1);
-  assert.equal(metrics.quotaFailures, 1);
-  assert.equal(metrics.retryAttempts, 0);
+  assert.equal(calls, 3);
+  assert.equal(metrics.quotaFailures, 2);
+  assert.equal(metrics.rateLimitFailures, 2);
+  assert.equal(metrics.retryAttempts, 2);
+  assert.deepEqual(delays, [5_000, 10_000]);
 });
 
 test("prefers complete normalized pricing over a higher-ranked source-price fallback", () => {
