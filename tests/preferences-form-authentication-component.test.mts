@@ -120,3 +120,13 @@ test("an authorized preferences save retains the saved confirmation", async () =
     /Could not save preferences\.|Sign in to save preferences\.|permission to save preferences/,
   );
 });
+
+test("Settings shows the default automatic Gemini evaluation limit as an integer input", async () => {
+  const container = await renderPreferencesForm(Response.json({ success: true }));
+  const input = container.querySelector<HTMLInputElement>("#automatic-evaluation-limit");
+
+  assert.ok(input);
+  assert.equal(input.type, "number");
+  assert.equal(input.value, "50");
+  assert.equal(input.min, "1");
+});

@@ -6,6 +6,7 @@ import {
   type ImportEvaluationResult,
 } from "@/lib/import-evaluation.mts";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
+import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
@@ -549,10 +550,11 @@ export async function POST(request: Request) {
       (result) => result.inserted,
     ).length;
     const [storedSettings] = await sql`
-      SELECT vinted FROM application_settings WHERE id = 1
+      SELECT vinted, gemini FROM application_settings WHERE id = 1
     `;
     const vintedSettings = parseVintedSettings(storedSettings?.vinted) ?? defaultVintedSettings;
-    const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings);
+    const geminiSettings = parseGeminiSettings(storedSettings?.gemini) ?? defaultGeminiSettings;
+    const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings, geminiSettings.automaticEvaluationLimit);
     const evaluationCandidates = preselection.candidates;
     const apiKey = process.env.GEMINI_API_KEY;
     const evaluationRun = await evaluateCandidates(

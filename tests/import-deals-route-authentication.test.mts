@@ -15,6 +15,7 @@ let transactionResultFactory: ((query: {
   text: string;
   values: unknown[];
 }) => Record<string, unknown>) | null = null;
+let storedGeminiSettings: unknown;
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -35,15 +36,15 @@ mockModule("@neondatabase/serverless", {
       persistedQueries.push(query);
       return Object.assign(query, {
         then: (resolve: (rows: Array<Record<string, unknown>>) => unknown) =>
-          resolve([
-            {
-              productId: "42",
-              watched: false,
-              feedback: null,
-              preferenceScore: 8,
-              dealScore: 7,
-            },
-          ]),
+          resolve(query.text.includes("SELECT vinted, gemini")
+            ? [{ vinted: undefined, gemini: storedGeminiSettings }]
+            : [{
+                productId: "42",
+                watched: false,
+                feedback: null,
+                preferenceScore: 8,
+                dealScore: 7,
+              }]),
       });
     };
 
@@ -113,6 +114,7 @@ function reset() {
   slackCalls = 0;
   persistedQueries = [];
   transactionResultFactory = null;
+  storedGeminiSettings = undefined;
 }
 
 function importRequest(authorization?: string) {
@@ -270,6 +272,48 @@ test("preserves the import flow for a valid bearer credential", async () => {
       candidatesSelected: 1,
     },
   });
+});
+
+test("uses the persisted Gemini automatic evaluation limit during import candidate selection", async () => {
+  reset();
+  storedGeminiSettings = { automaticEvaluationLimit: 10 };
+  let productNumber = 0;
+  transactionResultFactory = () => {
+    productNumber += 1;
+    return {
+      productId: String(productNumber),
+      externalUrl: `https://example.com/test-shoe-${productNumber}`,
+      title: `Test shoe ${productNumber}`,
+      currentPrice: "1200",
+      currency: "DKK",
+      sourceCurrentPrice: null,
+      sourceCurrency: null,
+      hidden: false,
+      inserted: true,
+      snapshotId: `snapshot-${productNumber}`,
+      priceChanged: false,
+      priceDropPercent: null,
+      discountPercent: "20",
+    };
+  };
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    const source = sourceForUrl(url);
+    return Response.json(validFeed(url, Array.from({ length: 6 }, (_, index) => ({
+      url: `https://${source.domain}/items/test-shoe-${index}`,
+      title: `Test shoe ${index}`,
+      currency: "DKK",
+      [source.priceField]: 1200,
+    }))));
+  };
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(evaluationCalls, 10);
+  const body = await response.json();
+  assert.equal(body.productsEvaluated, 10);
+  assert.equal(body.preselectionMetrics.candidatesSelected, 10);
 });
 
 test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {

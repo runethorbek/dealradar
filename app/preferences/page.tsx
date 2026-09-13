@@ -5,6 +5,7 @@ import { authOptions } from "@/auth";
 import { PreferencesForm } from "./preferences-form";
 import { AppNavigation } from "../navigation";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
+import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
 
 async function getPreferences() {
   await connection();
@@ -12,13 +13,13 @@ async function getPreferences() {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { profileText: "", vinted: defaultVintedSettings, failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, failed: true };
   }
 
   try {
     const sql = neon(databaseUrl);
     const [preference] = await sql`
-      SELECT p.profile_text AS "profileText", s.vinted
+      SELECT p.profile_text AS "profileText", s.vinted, s.gemini
       FROM preferences p
       LEFT JOIN application_settings s ON s.id = 1
       WHERE p.id = 1
@@ -28,15 +29,16 @@ async function getPreferences() {
       profileText:
         typeof preference?.profileText === "string" ? preference.profileText : "",
       vinted: parseVintedSettings(preference?.vinted) ?? defaultVintedSettings,
+      gemini: parseGeminiSettings(preference?.gemini) ?? defaultGeminiSettings,
       failed: false,
     };
   } catch {
-    return { profileText: "", vinted: defaultVintedSettings, failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, failed: true };
   }
 }
 
 export default async function PreferencesPage() {
-  const [{ profileText, vinted, failed }, session] = await Promise.all([
+  const [{ profileText, vinted, gemini, failed }, session] = await Promise.all([
     getPreferences(),
     getServerSession(authOptions),
   ]);
@@ -63,7 +65,7 @@ export default async function PreferencesPage() {
               Preferences could not be loaded right now.
             </p>
           ) : (
-            <PreferencesForm profileText={profileText} vinted={vinted} />
+            <PreferencesForm profileText={profileText} vinted={vinted} gemini={gemini} />
           )}
         </section>
       </main>

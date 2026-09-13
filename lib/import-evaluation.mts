@@ -4,6 +4,7 @@ import {
   vintedArticleConditions,
   type VintedSettings,
 } from "./vinted-settings.mts";
+import { defaultGeminiSettings } from "./gemini-settings.mts";
 
 export type ImportEvaluationResult = {
   productId: string;
@@ -50,7 +51,6 @@ type EvaluateCandidate = (
   candidate: EvaluationCandidate,
 ) => Promise<EvaluationScores>;
 
-const automaticEvaluationLimit = 50;
 const maximumEvaluationRetries = 3;
 const retryDelaysMs = [5_000, 10_000, 20_000];
 
@@ -277,6 +277,7 @@ function normalizedBrand(brand: string) {
 export function selectEvaluationCandidatesWithPreselection(
   results: ImportEvaluationResult[],
   settings: VintedSettings = defaultVintedSettings,
+  automaticEvaluationLimit = defaultGeminiSettings.automaticEvaluationLimit,
 ) {
   const candidates = selectCandidatesBeforeLimit(results);
   const minimumConditionIndex = settings.minimumCondition

@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { vintedArticleConditions, type VintedSettings } from "@/lib/vinted-settings.mts";
+import { defaultGeminiSettings, maximumAutomaticEvaluationLimit, type GeminiSettings } from "@/lib/gemini-settings.mts";
 
 type SaveState =
   | "idle"
@@ -13,10 +14,11 @@ type SaveState =
 
 const preferencesCallbackPath = "/preferences";
 
-export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] } }: { profileText: string; vinted?: VintedSettings }) {
+export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] }, gemini = defaultGeminiSettings }: { profileText: string; vinted?: VintedSettings; gemini?: GeminiSettings }) {
   const [value, setValue] = useState(profileText);
   const [minimumCondition, setMinimumCondition] = useState(vinted.minimumCondition ?? "");
   const [excludedBrands, setExcludedBrands] = useState(vinted.excludedBrands);
+  const [automaticEvaluationLimit, setAutomaticEvaluationLimit] = useState(gemini.automaticEvaluationLimit);
   const [brandInput, setBrandInput] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
@@ -57,7 +59,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands } }),
+        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit } }),
       });
       if (response.status === 401) return setSaveState("signInRequired");
       if (response.status === 403) return setSaveState("unauthorized");
@@ -120,6 +122,12 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
       </div>
 
       <div className="mt-10 border-t border-zinc-200 pt-8">
+        <h2 className="text-sm font-medium text-zinc-700">Gemini</h2>
+        <label htmlFor="automatic-evaluation-limit" className="mt-5 block text-sm font-medium text-zinc-700">Maximum automatic evaluations per import</label>
+        <input id="automatic-evaluation-limit" type="number" min="1" max={maximumAutomaticEvaluationLimit} step="1" value={automaticEvaluationLimit} onChange={(event) => { setAutomaticEvaluationLimit(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
+      </div>
+
+      <div className="mt-10 border-t border-zinc-200 pt-8">
         <h2 className="text-sm font-medium text-zinc-700">Vinted preselection</h2>
         <p className="mt-1 text-sm leading-6 text-zinc-500">Deterministic rules applied before automatic Gemini evaluation.</p>
         <label htmlFor="minimum-condition" className="mt-5 block text-sm font-medium text-zinc-700">Minimum condition</label>
@@ -130,7 +138,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
         <label htmlFor="excluded-brand" className="mt-5 block text-sm font-medium text-zinc-700">Excluded brands</label>
         <div className="mt-2 flex flex-wrap gap-2">{excludedBrands.map((brand) => <button key={brand} type="button" onClick={() => { setExcludedBrands((brands) => brands.filter((item) => item !== brand)); setSaveState("idle"); }} className="rounded-full bg-zinc-100 px-3 py-1 text-sm">{brand} ×</button>)}</div>
         <div className="mt-2 flex gap-2"><input id="excluded-brand" value={brandInput} onChange={(event) => setBrandInput(event.target.value)} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="Add brand" /><button type="button" onClick={() => { const brand = brandInput.trim(); if (brand && !excludedBrands.some((item) => item.toLocaleLowerCase() === brand.toLocaleLowerCase())) setExcludedBrands((brands) => [...brands, brand]); setBrandInput(""); setSaveState("idle"); }} className="rounded-lg border border-zinc-300 px-3 py-2 text-sm">Add brand</button></div>
-        <button type="button" onClick={saveVintedSettings} disabled={saveState === "saving" || saveState === "signInRequired" || saveState === "unauthorized"} className="mt-4 rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white disabled:cursor-wait disabled:opacity-60">{saveState === "saving" ? "Saving..." : "Save Vinted settings"}</button>
+        <button type="button" onClick={saveVintedSettings} disabled={saveState === "saving" || saveState === "signInRequired" || saveState === "unauthorized"} className="mt-4 rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white disabled:cursor-wait disabled:opacity-60">{saveState === "saving" ? "Saving..." : "Save settings"}</button>
       </div>
     </form>
   );
