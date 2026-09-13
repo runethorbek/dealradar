@@ -65,7 +65,11 @@ type EvaluationOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-type EvaluationFailureKind = "rate_limit" | "transient" | "permanent";
+type EvaluationFailureKind =
+  | "rate_limit"
+  | "transient"
+  | "invalid_evaluation"
+  | "permanent";
 
 function defaultSleep(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -93,6 +97,10 @@ export function classifyGeminiEvaluationFailure(
 ): EvaluationFailureKind {
   const status = getErrorStatus(error);
 
+  if (getEvaluationValidationCategory(error) !== null) {
+    return "invalid_evaluation";
+  }
+
   if (status === 429) {
     // The SDK exposes HTTP status directly but keeps provider error details in
     // the message. RESOURCE_EXHAUSTED and quota wording do not establish that
@@ -105,6 +113,14 @@ export function classifyGeminiEvaluationFailure(
   }
 
   return "permanent";
+}
+
+function isRetryableEvaluationFailure(kind: EvaluationFailureKind) {
+  return (
+    kind === "rate_limit" ||
+    kind === "transient" ||
+    kind === "invalid_evaluation"
+  );
 }
 
 function isQuotaLikeGeminiFailure(error: unknown) {
@@ -291,14 +307,11 @@ export async function evaluateCandidates(
           metrics.quotaFailures += 1;
         }
 
-        if (kind === "rate_limit" || kind === "transient") {
+        if (isRetryableEvaluationFailure(kind)) {
           metrics.retryableFailures += 1;
         }
 
-        if (
-          (kind === "rate_limit" || kind === "transient") &&
-          retries < maximumEvaluationRetries
-        ) {
+        if (isRetryableEvaluationFailure(kind) && retries < maximumEvaluationRetries) {
           metrics.retryAttempts += 1;
           await sleep(retryDelaysMs[retries]);
           retries += 1;
@@ -306,7 +319,7 @@ export async function evaluateCandidates(
         }
 
         metrics.failedEvaluations += 1;
-        if (kind === "rate_limit" || kind === "transient") {
+        if (isRetryableEvaluationFailure(kind)) {
           metrics.exhaustedRetries += 1;
         } else {
           metrics.permanentFailures += 1;

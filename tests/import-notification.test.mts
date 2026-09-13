@@ -270,8 +270,8 @@ test("does not retry permanent Gemini failures", async () => {
       [evaluationCandidate("one")],
       async () => {
         calls += 1;
-        const error = new Error("Gemini returned an invalid evaluation.");
-        Object.assign(error, { validationCategory: "invalid_json" });
+        const error = new Error("invalid request");
+        Object.assign(error, { status: 400 });
         throw error;
       },
       { sleep: async () => {} },
@@ -286,17 +286,41 @@ test("does not retry permanent Gemini failures", async () => {
         {
           productId: "one",
           failureKind: "permanent",
-          status: null,
+          status: 400,
           attempt: 1,
           retriesUsed: 0,
-          messageCategory: "invalid_evaluation",
-          validationCategory: "invalid_json",
+          messageCategory: "provider_error",
+          validationCategory: null,
         },
       ],
     ]);
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test("retries an invalid Gemini evaluation response", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const { evaluatedProducts, metrics } = await evaluateCandidates(
+    [evaluationCandidate("one")],
+    async () => {
+      calls += 1;
+      if (calls === 1) {
+        const error = new Error("Gemini returned an invalid evaluation.");
+        Object.assign(error, { validationCategory: "invalid_reason" });
+        throw error;
+      }
+      return { preferenceScore: 8, dealScore: 7 };
+    },
+    { sleep: async (milliseconds) => { delays.push(milliseconds); } },
+  );
+
+  assert.equal(calls, 2);
+  assert.equal(evaluatedProducts.length, 1);
+  assert.equal(metrics.retryAttempts, 1);
+  assert.equal(metrics.retryableFailures, 1);
+  assert.deepEqual(delays, [5_000]);
 });
 
 test("retries quota-like HTTP 429 responses", async () => {
