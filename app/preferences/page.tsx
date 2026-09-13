@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { authOptions } from "@/auth";
 import { PreferencesForm } from "./preferences-form";
 import { AppNavigation } from "../navigation";
+import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 
 async function getPreferences() {
   await connection();
@@ -11,29 +12,31 @@ async function getPreferences() {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { profileText: "", failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, failed: true };
   }
 
   try {
     const sql = neon(databaseUrl);
     const [preference] = await sql`
-      SELECT profile_text AS "profileText"
-      FROM preferences
-      WHERE id = 1
+      SELECT p.profile_text AS "profileText", s.vinted
+      FROM preferences p
+      LEFT JOIN application_settings s ON s.id = 1
+      WHERE p.id = 1
     `;
 
     return {
       profileText:
         typeof preference?.profileText === "string" ? preference.profileText : "",
+      vinted: parseVintedSettings(preference?.vinted) ?? defaultVintedSettings,
       failed: false,
     };
   } catch {
-    return { profileText: "", failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, failed: true };
   }
 }
 
 export default async function PreferencesPage() {
-  const [{ profileText, failed }, session] = await Promise.all([
+  const [{ profileText, vinted, failed }, session] = await Promise.all([
     getPreferences(),
     getServerSession(authOptions),
   ]);
@@ -60,7 +63,7 @@ export default async function PreferencesPage() {
               Preferences could not be loaded right now.
             </p>
           ) : (
-            <PreferencesForm profileText={profileText} />
+            <PreferencesForm profileText={profileText} vinted={vinted} />
           )}
         </section>
       </main>

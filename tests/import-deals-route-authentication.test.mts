@@ -219,14 +219,14 @@ test("preserves the import flow for a valid bearer credential", async () => {
   assert.equal(persistenceCalls, 1);
   assert.equal(evaluationCalls, 1);
   assert.equal(slackCalls, 1);
-  assert.equal(persistedQueries.length, 3);
+  assert.equal(persistedQueries.length, 4);
 
   for (const query of persistedQueries.filter((query) =>
     query.text.includes("INSERT INTO products"),
   )) {
     assert.doesNotMatch(query.text, /target_size|category/i);
     assert.match(query.text, /brand/i);
-    assert.match(query.text, /RETURNING\s+id,\s+external_url,/);
+    assert.match(query.text, /RETURNING\s+id,\s+source,\s+external_url,/);
 
     const rawData = query.values.find(
       (value) =>
@@ -261,6 +261,13 @@ test("preserves the import flow for a valid bearer credential", async () => {
       quotaFailures: 0,
       permanentFailures: 0,
       exhaustedRetries: 0,
+    },
+    preselectionMetrics: {
+      initialCandidates: 1,
+      excludedByCondition: 0,
+      excludedByBrand: 0,
+      eligibleCandidates: 1,
+      candidatesSelected: 1,
     },
   });
 });

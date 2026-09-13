@@ -1,4 +1,9 @@
 import type { ImportRecommendation } from "./import-notification.mts";
+import {
+  defaultVintedSettings,
+  vintedArticleConditions,
+  type VintedSettings,
+} from "./vinted-settings.mts";
 
 export type ImportEvaluationResult = {
   productId: string;
@@ -13,6 +18,9 @@ export type ImportEvaluationResult = {
   priceChanged: boolean;
   priceDropPercent: string | null;
   discountPercent: string | null;
+  source?: string;
+  brand?: string | null;
+  articleCondition?: string | null;
 };
 
 export type EvaluationCandidate = Pick<
@@ -28,6 +36,9 @@ export type EvaluationCandidate = Pick<
   | "inserted"
   | "priceDropPercent"
   | "discountPercent"
+  | "source"
+  | "brand"
+  | "articleCondition"
 >;
 
 type EvaluationScores = Pick<
@@ -59,6 +70,14 @@ export type EvaluationMetrics = {
 export type CandidateEvaluationRun = {
   evaluatedProducts: ImportRecommendation[];
   metrics: EvaluationMetrics;
+};
+
+export type PreselectionMetrics = {
+  initialCandidates: number;
+  excludedByCondition: number;
+  excludedByBrand: number;
+  eligibleCandidates: number;
+  candidatesSelected: number;
 };
 
 type EvaluationOptions = {
@@ -198,7 +217,7 @@ function maxNullableNumber(
   return right > left ? rightValue : leftValue;
 }
 
-export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
+function selectCandidatesBeforeLimit(results: ImportEvaluationResult[]) {
   const candidatesByProduct = new Map<string, EvaluationCandidate>();
 
   for (const result of results) {
@@ -217,6 +236,9 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
       sourceCurrentPrice: result.sourceCurrentPrice,
       sourceCurrency: result.sourceCurrency,
       hidden: result.hidden,
+      source: result.source,
+      brand: result.brand,
+      articleCondition: result.articleCondition,
       inserted: result.inserted || existing?.inserted === true,
       priceDropPercent: maxNullableNumber(
         existing?.priceDropPercent ?? null,
@@ -245,8 +267,54 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
           right.discountPercent,
         )
       );
-    })
-    .slice(0, automaticEvaluationLimit);
+    });
+}
+
+function normalizedBrand(brand: string) {
+  return brand.trim().toLocaleLowerCase();
+}
+
+export function selectEvaluationCandidatesWithPreselection(
+  results: ImportEvaluationResult[],
+  settings: VintedSettings = defaultVintedSettings,
+) {
+  const candidates = selectCandidatesBeforeLimit(results);
+  const minimumConditionIndex = settings.minimumCondition
+    ? vintedArticleConditions.indexOf(settings.minimumCondition)
+    : -1;
+  const excludedBrands = new Set(settings.excludedBrands.map(normalizedBrand));
+  let excludedByCondition = 0;
+  let excludedByBrand = 0;
+  const eligible = candidates.filter((candidate) => {
+    if (candidate.source !== "vinted.com") return true;
+    const conditionIndex = candidate.articleCondition
+      ? vintedArticleConditions.indexOf(candidate.articleCondition as (typeof vintedArticleConditions)[number])
+      : -1;
+    if (minimumConditionIndex >= 0 && conditionIndex >= 0 && conditionIndex < minimumConditionIndex) {
+      excludedByCondition += 1;
+      return false;
+    }
+    if (candidate.brand && excludedBrands.has(normalizedBrand(candidate.brand))) {
+      excludedByBrand += 1;
+      return false;
+    }
+    return true;
+  });
+  const selected = eligible.slice(0, automaticEvaluationLimit);
+  return {
+    candidates: selected,
+    metrics: {
+      initialCandidates: candidates.length,
+      excludedByCondition,
+      excludedByBrand,
+      eligibleCandidates: eligible.length,
+      candidatesSelected: selected.length,
+    } satisfies PreselectionMetrics,
+  };
+}
+
+export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
+  return selectEvaluationCandidatesWithPreselection(results).candidates;
 }
 
 export async function evaluateCandidates(

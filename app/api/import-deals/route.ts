@@ -2,9 +2,10 @@ import { neon } from "@neondatabase/serverless";
 import { evaluateProduct } from "@/lib/product-evaluation";
 import {
   evaluateCandidates,
-  selectEvaluationCandidates,
+  selectEvaluationCandidatesWithPreselection,
   type ImportEvaluationResult,
 } from "@/lib/import-evaluation.mts";
+import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
@@ -434,6 +435,7 @@ export async function POST(request: Request) {
           raw_data = EXCLUDED.raw_data
         RETURNING
           id,
+          source,
           external_url,
           title,
           current_price,
@@ -441,6 +443,8 @@ export async function POST(request: Request) {
           source_current_price,
           source_currency,
           hidden,
+          brand,
+          raw_data,
           discount_percent
       ),
       snapshot AS (
@@ -474,6 +478,7 @@ export async function POST(request: Request) {
       )
       SELECT
         upserted.id::TEXT AS "productId",
+        upserted.source,
         upserted.external_url AS "externalUrl",
         upserted.title,
         upserted.current_price::TEXT AS "currentPrice",
@@ -481,6 +486,8 @@ export async function POST(request: Request) {
         upserted.source_current_price::TEXT AS "sourceCurrentPrice",
         upserted.source_currency AS "sourceCurrency",
         upserted.hidden,
+        upserted.brand,
+        upserted.raw_data ->> 'article_condition' AS "articleCondition",
         (existing.id IS NULL) AS inserted,
         snapshot.id::TEXT AS "snapshotId",
         (
@@ -541,7 +548,12 @@ export async function POST(request: Request) {
     const productsInserted = importResults.filter(
       (result) => result.inserted,
     ).length;
-    const evaluationCandidates = selectEvaluationCandidates(importResults);
+    const [storedSettings] = await sql`
+      SELECT vinted FROM application_settings WHERE id = 1
+    `;
+    const vintedSettings = parseVintedSettings(storedSettings?.vinted) ?? defaultVintedSettings;
+    const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings);
+    const evaluationCandidates = preselection.candidates;
     const apiKey = process.env.GEMINI_API_KEY;
     const evaluationRun = await evaluateCandidates(
       evaluationCandidates,
@@ -556,7 +568,10 @@ export async function POST(request: Request) {
     );
     const { evaluatedProducts, metrics: evaluationMetrics } = evaluationRun;
     const productsEvaluated = evaluatedProducts.length;
-    console.info("DealRadar automatic evaluation completed.", evaluationMetrics);
+    console.info("DealRadar automatic evaluation completed.", {
+      ...preselection.metrics,
+      ...evaluationMetrics,
+    });
     const productIds = [...new Set(importResults.map((result) => result.productId))];
     const highlightStateRows = productIds.length
       ? await sql`
@@ -634,6 +649,7 @@ export async function POST(request: Request) {
       productsEvaluated,
       productsSkippedInvalidPrice,
       evaluationMetrics,
+      preselectionMetrics: preselection.metrics,
     });
   } catch (error) {
     const message =

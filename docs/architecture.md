@@ -166,6 +166,13 @@ Gemini returns structured evaluation output.
 
 Persistent memory remains in DealRadar/Neon.
 
+Gemini preferences are soft user guidance supplied to Gemini. Application
+settings are separate deterministic behavior. For Vinted, configured minimum
+article condition and excluded brands preselect eligible import candidates
+before the existing evaluation ranking and 50-candidate limit; Zalando does
+not use these rules. Missing or unknown Vinted condition and brand values are
+eligible.
+
 See:
 
 - `docs/ubiquitous-language.md`
