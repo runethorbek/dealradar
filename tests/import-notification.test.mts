@@ -85,7 +85,7 @@ test("evaluates hidden and visible products before selecting a visible recommend
   ];
   const evaluatedProductIds: string[] = [];
 
-  const evaluatedProducts = await evaluateCandidates(
+  const { evaluatedProducts } = await evaluateCandidates(
     selectEvaluationCandidates(importedResults),
     async (candidate) => {
       evaluatedProductIds.push(candidate.productId);
@@ -127,7 +127,7 @@ test("returns no recommendation when every evaluated product is hidden", async (
   ];
   let evaluationCount = 0;
 
-  const evaluatedProducts = await evaluateCandidates(
+  const { evaluatedProducts } = await evaluateCandidates(
     selectEvaluationCandidates(importedResults),
     async () => {
       evaluationCount += 1;
@@ -137,6 +137,138 @@ test("returns no recommendation when every evaluated product is hidden", async (
 
   assert.equal(evaluationCount, 1);
   assert.equal(selectTopRecommendation(evaluatedProducts), null);
+});
+
+function evaluationCandidate(productId: string) {
+  return {
+    productId,
+    externalUrl: `https://retailer.example/products/${productId}`,
+    title: `Deal ${productId}`,
+    currentPrice: "100.00",
+    currency: "DKK",
+    sourceCurrentPrice: null,
+    sourceCurrency: null,
+    hidden: false,
+    inserted: true,
+    priceDropPercent: null,
+    discountPercent: null,
+  };
+}
+
+test("evaluates candidates sequentially", async () => {
+  const started: string[] = [];
+  let resolveFirst: (() => void) | undefined;
+  const firstComplete = new Promise<void>((resolve) => {
+    resolveFirst = resolve;
+  });
+
+  const evaluation = evaluateCandidates(
+    [evaluationCandidate("one"), evaluationCandidate("two")],
+    async (candidate) => {
+      started.push(candidate.productId);
+      if (candidate.productId === "one") {
+        await firstComplete;
+      }
+      return { preferenceScore: 8, dealScore: 7 };
+    },
+  );
+
+  await Promise.resolve();
+  assert.deepEqual(started, ["one"]);
+  resolveFirst?.();
+  await evaluation;
+  assert.deepEqual(started, ["one", "two"]);
+});
+
+test("retries a rate-limited candidate before evaluating the next candidate", async () => {
+  const calls: string[] = [];
+  const { evaluatedProducts, metrics } = await evaluateCandidates(
+    [evaluationCandidate("one"), evaluationCandidate("two")],
+    async (candidate) => {
+      calls.push(candidate.productId);
+      if (candidate.productId === "one" && calls.length === 1) {
+        const error = new Error("RESOURCE_EXHAUSTED");
+        Object.assign(error, { status: 429 });
+        throw error;
+      }
+      return { preferenceScore: 8, dealScore: 7 };
+    },
+    { sleep: async () => {} },
+  );
+
+  assert.deepEqual(calls, ["one", "one", "two"]);
+  assert.equal(evaluatedProducts.length, 2);
+  assert.deepEqual(metrics, {
+    candidatesSelected: 2,
+    requestsAttempted: 3,
+    successfulEvaluations: 2,
+    failedEvaluations: 0,
+    retryAttempts: 1,
+    retryableFailures: 1,
+    rateLimitFailures: 1,
+    quotaFailures: 0,
+    exhaustedRetries: 0,
+  });
+});
+
+test("continues after a candidate exhausts retries", async () => {
+  const calls: string[] = [];
+  const { evaluatedProducts, metrics } = await evaluateCandidates(
+    [evaluationCandidate("one"), evaluationCandidate("two")],
+    async (candidate) => {
+      calls.push(candidate.productId);
+      if (candidate.productId === "one") {
+        const error = new Error("temporary service failure");
+        Object.assign(error, { status: 503 });
+        throw error;
+      }
+      return { preferenceScore: 8, dealScore: 7 };
+    },
+    { sleep: async () => {} },
+  );
+
+  assert.deepEqual(calls, ["one", "one", "one", "one", "two"]);
+  assert.equal(evaluatedProducts.length, 1);
+  assert.equal(metrics.failedEvaluations, 1);
+  assert.equal(metrics.retryAttempts, 3);
+  assert.equal(metrics.retryableFailures, 4);
+  assert.equal(metrics.exhaustedRetries, 1);
+});
+
+test("does not retry permanent Gemini failures", async () => {
+  let calls = 0;
+  const { metrics } = await evaluateCandidates(
+    [evaluationCandidate("one")],
+    async () => {
+      calls += 1;
+      const error = new Error("invalid request");
+      Object.assign(error, { status: 400 });
+      throw error;
+    },
+    { sleep: async () => {} },
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(metrics.failedEvaluations, 1);
+  assert.equal(metrics.retryAttempts, 0);
+});
+
+test("does not retry persistent quota exhaustion", async () => {
+  let calls = 0;
+  const { metrics } = await evaluateCandidates(
+    [evaluationCandidate("one")],
+    async () => {
+      calls += 1;
+      const error = new Error("Quota exceeded: daily limit: 0");
+      Object.assign(error, { status: 429 });
+      throw error;
+    },
+    { sleep: async () => {} },
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(metrics.quotaFailures, 1);
+  assert.equal(metrics.retryAttempts, 0);
 });
 
 test("prefers complete normalized pricing over a higher-ranked source-price fallback", () => {

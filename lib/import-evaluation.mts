@@ -40,7 +40,71 @@ type EvaluateCandidate = (
 ) => Promise<EvaluationScores>;
 
 const automaticEvaluationLimit = 50;
-const evaluationConcurrency = 5;
+const maximumEvaluationRetries = 3;
+const retryDelaysMs = [1_000, 2_000, 4_000];
+
+export type EvaluationMetrics = {
+  candidatesSelected: number;
+  requestsAttempted: number;
+  successfulEvaluations: number;
+  failedEvaluations: number;
+  retryAttempts: number;
+  retryableFailures: number;
+  rateLimitFailures: number;
+  quotaFailures: number;
+  exhaustedRetries: number;
+};
+
+export type CandidateEvaluationRun = {
+  evaluatedProducts: ImportRecommendation[];
+  metrics: EvaluationMetrics;
+};
+
+type RetryOptions = {
+  sleep?: (milliseconds: number) => Promise<void>;
+};
+
+type EvaluationFailureKind = "rate_limit" | "transient" | "quota" | "permanent";
+
+function defaultSleep(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function getErrorStatus(error: unknown) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof error.status === "number"
+  ) {
+    return error.status;
+  }
+
+  return null;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "";
+}
+
+export function classifyGeminiEvaluationFailure(
+  error: unknown,
+): EvaluationFailureKind {
+  const status = getErrorStatus(error);
+  const message = getErrorMessage(error).toLowerCase();
+  const indicatesPersistentQuota =
+    /(?:daily|per day|limit:\s*0|billing|credit|payment)/.test(message);
+
+  if (status === 429) {
+    return indicatesPersistentQuota ? "quota" : "rate_limit";
+  }
+
+  if (status === 408 || (status !== null && status >= 500 && status <= 599)) {
+    return "transient";
+  }
+
+  return "permanent";
+}
 
 function compareNullableNumbersDescending(
   leftValue: string | null,
@@ -136,20 +200,37 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
 export async function evaluateCandidates(
   candidates: EvaluationCandidate[],
   evaluateCandidate: EvaluateCandidate | null,
-) {
+  options: RetryOptions = {},
+): Promise<CandidateEvaluationRun> {
+  const metrics: EvaluationMetrics = {
+    candidatesSelected: candidates.length,
+    requestsAttempted: 0,
+    successfulEvaluations: 0,
+    failedEvaluations: 0,
+    retryAttempts: 0,
+    retryableFailures: 0,
+    rateLimitFailures: 0,
+    quotaFailures: 0,
+    exhaustedRetries: 0,
+  };
+
   if (!evaluateCandidate) {
-    return [];
+    return { evaluatedProducts: [], metrics };
   }
 
   const evaluated: ImportRecommendation[] = [];
+  const sleep = options.sleep ?? defaultSleep;
 
-  for (let index = 0; index < candidates.length; index += evaluationConcurrency) {
-    const batch = candidates.slice(index, index + evaluationConcurrency);
-    const results = await Promise.allSettled(
-      batch.map(async (candidate) => {
+  for (const candidate of candidates) {
+    let retries = 0;
+
+    while (true) {
+      metrics.requestsAttempted += 1;
+
+      try {
         const evaluation = await evaluateCandidate(candidate);
 
-        return {
+        evaluated.push({
           productId: candidate.productId,
           externalUrl: candidate.externalUrl,
           title: candidate.title,
@@ -160,16 +241,40 @@ export async function evaluateCandidates(
           hidden: candidate.hidden,
           preferenceScore: evaluation.preferenceScore,
           dealScore: evaluation.dealScore,
-        };
-      }),
-    );
+        });
+        metrics.successfulEvaluations += 1;
+        break;
+      } catch (error) {
+        const kind = classifyGeminiEvaluationFailure(error);
 
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        evaluated.push(result.value);
+        if (kind === "rate_limit") {
+          metrics.rateLimitFailures += 1;
+        } else if (kind === "quota") {
+          metrics.quotaFailures += 1;
+        }
+
+        if (kind === "rate_limit" || kind === "transient") {
+          metrics.retryableFailures += 1;
+        }
+
+        if (
+          (kind === "rate_limit" || kind === "transient") &&
+          retries < maximumEvaluationRetries
+        ) {
+          metrics.retryAttempts += 1;
+          await sleep(retryDelaysMs[retries]);
+          retries += 1;
+          continue;
+        }
+
+        metrics.failedEvaluations += 1;
+        if (kind === "rate_limit" || kind === "transient") {
+          metrics.exhaustedRetries += 1;
+        }
+        break;
       }
     }
   }
 
-  return evaluated;
+  return { evaluatedProducts: evaluated, metrics };
 }

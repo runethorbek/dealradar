@@ -543,7 +543,7 @@ export async function POST(request: Request) {
     ).length;
     const evaluationCandidates = selectEvaluationCandidates(importResults);
     const apiKey = process.env.GEMINI_API_KEY;
-    const evaluatedProducts = await evaluateCandidates(
+    const evaluationRun = await evaluateCandidates(
       evaluationCandidates,
       apiKey
         ? (candidate) =>
@@ -554,7 +554,9 @@ export async function POST(request: Request) {
             })
         : null,
     );
+    const { evaluatedProducts, metrics: evaluationMetrics } = evaluationRun;
     const productsEvaluated = evaluatedProducts.length;
+    console.info("DealRadar automatic evaluation completed.", evaluationMetrics);
     const productIds = [...new Set(importResults.map((result) => result.productId))];
     const highlightStateRows = productIds.length
       ? await sql`
@@ -631,6 +633,7 @@ export async function POST(request: Request) {
       snapshotsInserted,
       productsEvaluated,
       productsSkippedInvalidPrice,
+      evaluationMetrics,
     });
   } catch (error) {
     const message =

@@ -250,6 +250,17 @@ test("preserves the import flow for a valid bearer credential", async () => {
     snapshotsInserted: 2,
     productsEvaluated: 1,
     productsSkippedInvalidPrice: 0,
+    evaluationMetrics: {
+      candidatesSelected: 1,
+      requestsAttempted: 1,
+      successfulEvaluations: 1,
+      failedEvaluations: 0,
+      retryAttempts: 0,
+      retryableFailures: 0,
+      rateLimitFailures: 0,
+      quotaFailures: 0,
+      exhaustedRetries: 0,
+    },
   });
 });
 
