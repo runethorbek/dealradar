@@ -270,8 +270,8 @@ test("does not retry permanent Gemini failures", async () => {
       [evaluationCandidate("one")],
       async () => {
         calls += 1;
-        const error = new Error("invalid request");
-        Object.assign(error, { status: 400 });
+        const error = new Error("Gemini returned an invalid evaluation.");
+        Object.assign(error, { validationCategory: "invalid_json" });
         throw error;
       },
       { sleep: async () => {} },
@@ -286,10 +286,11 @@ test("does not retry permanent Gemini failures", async () => {
         {
           productId: "one",
           failureKind: "permanent",
-          status: 400,
+          status: null,
           attempt: 1,
           retriesUsed: 0,
-          messageCategory: "provider_error",
+          messageCategory: "invalid_evaluation",
+          validationCategory: "invalid_json",
         },
       ],
     ]);

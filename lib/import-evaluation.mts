@@ -129,6 +129,19 @@ function getFailureMessageCategory(error: unknown) {
   return getErrorStatus(error) === null ? "unexpected_error" : "provider_error";
 }
 
+function getEvaluationValidationCategory(error: unknown) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "validationCategory" in error &&
+    typeof error.validationCategory === "string"
+  ) {
+    return error.validationCategory;
+  }
+
+  return null;
+}
+
 function compareNullableNumbersDescending(
   leftValue: string | null,
   rightValue: string | null,
@@ -305,6 +318,7 @@ export async function evaluateCandidates(
           attempt: retries + 1,
           retriesUsed: retries,
           messageCategory: getFailureMessageCategory(error),
+          validationCategory: getEvaluationValidationCategory(error),
         });
         break;
       }

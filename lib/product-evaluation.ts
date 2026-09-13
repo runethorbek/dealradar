@@ -12,6 +12,17 @@ export type ProductEvaluation = {
 };
 
 type GeneratedEvaluation = Omit<ProductEvaluation, "productId" | "evaluatedAt">;
+type InvalidEvaluationCategory =
+  | "empty_response"
+  | "invalid_json"
+  | "invalid_shape"
+  | "unexpected_fields"
+  | "missing_required_fields"
+  | "invalid_scores"
+  | "invalid_reason";
+type ParsedEvaluation =
+  | { evaluation: GeneratedEvaluation }
+  | { evaluation: null; validationCategory: InvalidEvaluationCategory };
 
 const maximumMatchedMonitors = 20;
 const maximumMonitorIdLength = 120;
@@ -45,9 +56,9 @@ const evaluationSchema = {
   required: ["preferenceScore", "dealScore", "reason"],
 };
 
-function parseEvaluation(value: string | undefined): GeneratedEvaluation | null {
+function parseEvaluation(value: string | undefined): ParsedEvaluation {
   if (!value) {
-    return null;
+    return { evaluation: null, validationCategory: "empty_response" };
   }
 
   let parsed: unknown;
@@ -55,42 +66,62 @@ function parseEvaluation(value: string | undefined): GeneratedEvaluation | null 
   try {
     parsed = JSON.parse(value);
   } catch {
-    return null;
+    return { evaluation: null, validationCategory: "invalid_json" };
   }
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return null;
+    return { evaluation: null, validationCategory: "invalid_shape" };
   }
 
   const evaluation = parsed as Record<string, unknown>;
   const allowedKeys = new Set(["preferenceScore", "dealScore", "reason"]);
 
   if (Object.keys(evaluation).some((key) => !allowedKeys.has(key))) {
-    return null;
+    return { evaluation: null, validationCategory: "unexpected_fields" };
   }
 
   const { preferenceScore, dealScore, reason } = evaluation;
 
   if (
+    !("preferenceScore" in evaluation) ||
+    !("dealScore" in evaluation) ||
+    !("reason" in evaluation)
+  ) {
+    return { evaluation: null, validationCategory: "missing_required_fields" };
+  }
+
+  if (
     typeof preferenceScore !== "number" ||
     !Number.isInteger(preferenceScore) ||
     preferenceScore < 0 ||
-    preferenceScore > 10 ||
+    preferenceScore > 10
+  ) {
+    return { evaluation: null, validationCategory: "invalid_scores" };
+  }
+
+  if (
     typeof dealScore !== "number" ||
     !Number.isInteger(dealScore) ||
     dealScore < 0 ||
-    dealScore > 10 ||
+    dealScore > 10
+  ) {
+    return { evaluation: null, validationCategory: "invalid_scores" };
+  }
+
+  if (
     typeof reason !== "string" ||
     !reason.trim() ||
     reason.trim().length > 300
   ) {
-    return null;
+    return { evaluation: null, validationCategory: "invalid_reason" };
   }
 
   return {
-    preferenceScore,
-    dealScore,
-    reason: reason.trim(),
+    evaluation: {
+      preferenceScore,
+      dealScore,
+      reason: reason.trim(),
+    },
   };
 }
 
@@ -233,11 +264,14 @@ ${JSON.stringify(context)}`,
       responseJsonSchema: evaluationSchema,
     },
   });
-  const evaluation = parseEvaluation(result.text);
+  const parsedEvaluation = parseEvaluation(result.text);
 
-  if (!evaluation) {
-    throw new Error("Gemini returned an invalid evaluation.");
+  if (!parsedEvaluation.evaluation) {
+    throw Object.assign(new Error("Gemini returned an invalid evaluation."), {
+      validationCategory: parsedEvaluation.validationCategory,
+    });
   }
+  const evaluation = parsedEvaluation.evaluation;
 
   const [savedEvaluation] = await sql`
     INSERT INTO product_evaluations (
