@@ -57,6 +57,8 @@ Read the documentation relevant to the change before editing:
   pricing/currency semantics, timestamps, images, and scan metadata.
 - `docs/ubiquitous-language.md` for feedback, scoring, ranking,
   recommendation, and user-facing domain semantics.
+- `docs/adr/0001-vercel-workflow-platform-boundary.md` before changing
+  durable evaluation execution or Vercel Workflow integration.
 
 Do not read every document mechanically for unrelated changes.
 
@@ -89,6 +91,21 @@ out the semantic change during review.
 - Never log API keys, bearer tokens, database credentials, or Slack tokens.
 - Handle failures from Gemini, Slack, exchange-rate providers, GitHub, and other external services explicitly.
 - Avoid making external API calls once per product when one call per import is sufficient.
+
+### Durable execution platform boundary
+
+- Vercel Workflow is a replaceable execution mechanism, not part of
+  DealRadar's application or domain model.
+- Keep Vercel-specific APIs or types inside an orchestration adapter. Do not introduce
+  them into candidate selection, deterministic preselection, evaluation-limit
+  policy, Gemini evaluation or retry/failure semantics, evaluation batching
+  logic, persistence, recommendation selection, or Slack formatting and
+  notification semantics.
+- Operations run by a Workflow must remain callable independently of Vercel.
+- #34 deterministic preselection, #35 Gemini evaluation and bounded
+  retry/failure behavior, #36 maximum evaluation workload per import, and
+  `workflowBatchSize` remain application-level concerns. `workflowBatchSize`
+  only controls how many already-selected candidates a durable step processes.
 
 ### UI
 
