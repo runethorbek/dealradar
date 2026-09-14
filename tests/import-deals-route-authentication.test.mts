@@ -222,6 +222,7 @@ test("preserves the import flow for a valid bearer credential", async () => {
   assert.equal(evaluationCalls, 1);
   assert.equal(slackCalls, 1);
   assert.equal(persistedQueries.length, 4);
+  assert.ok(persistedQueries.every((query) => !query.text.includes("evaluation_runs")));
 
   for (const query of persistedQueries.filter((query) =>
     query.text.includes("INSERT INTO products"),
