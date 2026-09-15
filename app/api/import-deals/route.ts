@@ -584,7 +584,15 @@ export async function POST(request: Request) {
         importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings },
       });
       evaluationRunId = evaluationRun.id;
-      await startEvaluationRunWorkflow({ databaseUrl, apiKey, runId: evaluationRun.id });
+      try {
+        await startEvaluationRunWorkflow({ databaseUrl, apiKey, runId: evaluationRun.id });
+      } catch (error) {
+        console.error("[durable-launch] import workflow start failed", {
+          runId: evaluationRun.id,
+          error,
+        });
+        throw error;
+      }
     }
     console.info("DealRadar durable evaluation initiated.", { ...preselection.metrics, evaluationRunId });
     const productIds = [...new Set(importResults.map((result) => result.productId))];
@@ -651,6 +659,7 @@ export async function POST(request: Request) {
       preselectionMetrics: preselection.metrics,
     });
   } catch (error) {
+    console.error("[durable-import] import failed", { ref, error });
     const message =
       error instanceof SourceDataError
         ? error.message

@@ -43,12 +43,18 @@ export async function processEvaluationRunWithWorkflow(
 export async function startEvaluationRunWorkflow(input: ProcessEvaluationRunWorkflowInput) {
   const sql = neon(input.databaseUrl);
   const claimToken = await claimEvaluationRunLaunch(sql, input.runId);
-  if (!claimToken) return null;
+  if (!claimToken) {
+    console.info("[durable-launch] launch claim unavailable", { runId: input.runId });
+    return null;
+  }
   try {
+    console.info("[durable-launch] starting workflow", { runId: input.runId });
     const run = await start(processEvaluationRunWithWorkflow, [input]);
     if (!await markEvaluationRunLaunched(sql, input.runId, claimToken)) throw new Error("Evaluation run launch claim was lost.");
+    console.info("[durable-launch] workflow started", { runId: input.runId });
     return run;
   } catch (error) {
+    console.error("[durable-launch] workflow start failed", { runId: input.runId, error });
     await releaseEvaluationRunLaunchClaim(sql, input.runId, claimToken);
     throw error;
   }
