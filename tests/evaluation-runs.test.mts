@@ -6,6 +6,7 @@ import {
   getEvaluationRun,
   loadNextEvaluationBatch,
   markEvaluationRunNotificationSent,
+  recordEvaluationBatchProcessed,
   recordEvaluationCandidateOutcome,
   startEvaluationRun,
   type EvaluationRunSql,
@@ -23,6 +24,7 @@ const runRow = {
   evaluationsCompleted: 0,
   evaluationsFailed: 0,
   pendingCandidates: 2,
+  batchesProcessed: 0,
 };
 
 function queryText(strings: TemplateStringsArray) {
@@ -111,6 +113,8 @@ test("has explicit, platform-independent state transitions for Slice 4", async (
   assert.ok(queries.some((query) => query.includes("SET status = $parameter")));
   assert.ok(queries.some((query) => query.includes("SET status = 'completed'")));
   assert.ok(queries.some((query) => query.includes("notification_sent = TRUE")));
+  assert.equal(await recordEvaluationBatchProcessed(sql, "7"), true);
+  assert.ok(queries.some((query) => query.includes("SET batches_processed = batches_processed + 1")));
 });
 
 test("keeps the application persistence module free of Vercel dependencies", async () => {

@@ -84,6 +84,45 @@ type EvaluationOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
+export type CandidateEvaluationAttempt = {
+  evaluation: EvaluationScores | null;
+  metrics: EvaluationMetrics;
+};
+
+export async function evaluateProductWithRetry(
+  productId: string,
+  evaluateProduct: () => Promise<EvaluationScores>,
+  options: EvaluationOptions = {},
+): Promise<CandidateEvaluationAttempt> {
+  const metrics = emptyEvaluationMetrics(1);
+  const sleep = options.sleep ?? defaultSleep;
+  let retries = 0;
+  while (true) {
+    metrics.requestsAttempted += 1;
+    try {
+      const evaluation = await evaluateProduct();
+      metrics.successfulEvaluations += 1;
+      return { evaluation, metrics };
+    } catch (error) {
+      const kind = classifyGeminiEvaluationFailure(error);
+      if (kind === "rate_limit") metrics.rateLimitFailures += 1;
+      if (isQuotaLikeGeminiFailure(error)) metrics.quotaFailures += 1;
+      if (isRetryableEvaluationFailure(kind)) metrics.retryableFailures += 1;
+      if (isRetryableEvaluationFailure(kind) && retries < maximumEvaluationRetries) {
+        metrics.retryAttempts += 1;
+        await sleep(retryDelaysMs[retries]);
+        retries += 1;
+        continue;
+      }
+      metrics.failedEvaluations += 1;
+      if (isRetryableEvaluationFailure(kind)) metrics.exhaustedRetries += 1;
+      else metrics.permanentFailures += 1;
+      console.warn("DealRadar automatic evaluation failed.", { productId, failureKind: kind, status: getErrorStatus(error), attempt: retries + 1, retriesUsed: retries, messageCategory: getFailureMessageCategory(error), validationCategory: getEvaluationValidationCategory(error) });
+      return { evaluation: null, metrics };
+    }
+  }
+}
+
 type EvaluationFailureKind =
   | "rate_limit"
   | "transient"
@@ -318,13 +357,9 @@ export function selectEvaluationCandidates(results: ImportEvaluationResult[]) {
   return selectEvaluationCandidatesWithPreselection(results).candidates;
 }
 
-export async function evaluateCandidates(
-  candidates: EvaluationCandidate[],
-  evaluateCandidate: EvaluateCandidate | null,
-  options: EvaluationOptions = {},
-): Promise<CandidateEvaluationRun> {
-  const metrics: EvaluationMetrics = {
-    candidatesSelected: candidates.length,
+function emptyEvaluationMetrics(candidatesSelected: number): EvaluationMetrics {
+  return {
+    candidatesSelected,
     requestsAttempted: 0,
     successfulEvaluations: 0,
     failedEvaluations: 0,
@@ -335,75 +370,52 @@ export async function evaluateCandidates(
     permanentFailures: 0,
     exhaustedRetries: 0,
   };
+}
+
+export async function evaluateCandidateWithRetry(
+  candidate: EvaluationCandidate,
+  evaluateCandidate: EvaluateCandidate | null,
+  options: EvaluationOptions = {},
+): Promise<CandidateEvaluationAttempt> {
+  if (!evaluateCandidate) return { evaluation: null, metrics: emptyEvaluationMetrics(1) };
+  return evaluateProductWithRetry(candidate.productId, () => evaluateCandidate(candidate), options);
+}
+
+function addEvaluationMetrics(target: EvaluationMetrics, source: EvaluationMetrics) {
+  for (const key of Object.keys(target) as Array<keyof EvaluationMetrics>) {
+    target[key] += source[key];
+  }
+}
+
+export async function evaluateCandidates(
+  candidates: EvaluationCandidate[],
+  evaluateCandidate: EvaluateCandidate | null,
+  options: EvaluationOptions = {},
+): Promise<CandidateEvaluationRun> {
+  const metrics = emptyEvaluationMetrics(0);
+  metrics.candidatesSelected = candidates.length;
 
   if (!evaluateCandidate) {
     return { evaluatedProducts: [], metrics };
   }
 
   const evaluated: ImportRecommendation[] = [];
-  const sleep = options.sleep ?? defaultSleep;
-
   for (const candidate of candidates) {
-    let retries = 0;
-
-    while (true) {
-      metrics.requestsAttempted += 1;
-
-      try {
-        const evaluation = await evaluateCandidate(candidate);
-
-        evaluated.push({
-          productId: candidate.productId,
-          externalUrl: candidate.externalUrl,
-          title: candidate.title,
-          currentPrice: candidate.currentPrice,
-          currency: candidate.currency,
-          sourceCurrentPrice: candidate.sourceCurrentPrice,
-          sourceCurrency: candidate.sourceCurrency,
-          hidden: candidate.hidden,
-          preferenceScore: evaluation.preferenceScore,
-          dealScore: evaluation.dealScore,
-        });
-        metrics.successfulEvaluations += 1;
-        break;
-      } catch (error) {
-        const kind = classifyGeminiEvaluationFailure(error);
-
-        if (kind === "rate_limit") {
-          metrics.rateLimitFailures += 1;
-        }
-        if (isQuotaLikeGeminiFailure(error)) {
-          metrics.quotaFailures += 1;
-        }
-
-        if (isRetryableEvaluationFailure(kind)) {
-          metrics.retryableFailures += 1;
-        }
-
-        if (isRetryableEvaluationFailure(kind) && retries < maximumEvaluationRetries) {
-          metrics.retryAttempts += 1;
-          await sleep(retryDelaysMs[retries]);
-          retries += 1;
-          continue;
-        }
-
-        metrics.failedEvaluations += 1;
-        if (isRetryableEvaluationFailure(kind)) {
-          metrics.exhaustedRetries += 1;
-        } else {
-          metrics.permanentFailures += 1;
-        }
-        console.warn("DealRadar automatic evaluation failed.", {
-          productId: candidate.productId,
-          failureKind: kind,
-          status: getErrorStatus(error),
-          attempt: retries + 1,
-          retriesUsed: retries,
-          messageCategory: getFailureMessageCategory(error),
-          validationCategory: getEvaluationValidationCategory(error),
-        });
-        break;
-      }
+    const attempt = await evaluateCandidateWithRetry(candidate, evaluateCandidate, options);
+    addEvaluationMetrics(metrics, { ...attempt.metrics, candidatesSelected: 0 });
+    if (attempt.evaluation) {
+      evaluated.push({
+        productId: candidate.productId,
+        externalUrl: candidate.externalUrl,
+        title: candidate.title,
+        currentPrice: candidate.currentPrice,
+        currency: candidate.currency,
+        sourceCurrentPrice: candidate.sourceCurrentPrice,
+        sourceCurrency: candidate.sourceCurrency,
+        hidden: candidate.hidden,
+        preferenceScore: attempt.evaluation.preferenceScore,
+        dealScore: attempt.evaluation.dealScore,
+      });
     }
   }
 

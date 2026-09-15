@@ -1,5 +1,5 @@
 export type EvaluationRunStatus = "pending" | "running" | "completed";
-export type EvaluationCandidateStatus = "pending" | "completed" | "failed";
+export type EvaluationCandidateStatus = "pending" | "processing" | "completed" | "failed";
 
 export type EvaluationRun = {
   id: string;
@@ -13,6 +13,7 @@ export type EvaluationRun = {
   evaluationsCompleted: number;
   evaluationsFailed: number;
   pendingCandidates: number;
+  batchesProcessed: number;
 };
 
 export type EvaluationRunCandidate = {
@@ -70,6 +71,7 @@ function asEvaluationRun(row: EvaluationRunRow): EvaluationRun {
     evaluationsCompleted: asCount(row.evaluationsCompleted, "completed count"),
     evaluationsFailed: asCount(row.evaluationsFailed, "failed count"),
     pendingCandidates: asCount(row.pendingCandidates, "pending count"),
+    batchesProcessed: asCount(row.batchesProcessed, "batches processed"),
   };
 }
 
@@ -102,7 +104,8 @@ async function loadRun(sql: EvaluationRunSql, runId: string) {
       COUNT(erc.product_id)::INTEGER AS "candidatesSelected",
       COUNT(erc.product_id) FILTER (WHERE erc.status = 'completed')::INTEGER AS "evaluationsCompleted",
       COUNT(erc.product_id) FILTER (WHERE erc.status = 'failed')::INTEGER AS "evaluationsFailed",
-      COUNT(erc.product_id) FILTER (WHERE erc.status = 'pending')::INTEGER AS "pendingCandidates"
+      COUNT(erc.product_id) FILTER (WHERE erc.status IN ('pending', 'processing'))::INTEGER AS "pendingCandidates"
+      , er.batches_processed::INTEGER AS "batchesProcessed"
     FROM evaluation_runs er
     LEFT JOIN evaluation_run_candidates erc ON erc.run_id = er.id
     WHERE er.id = ${runId}
@@ -152,7 +155,8 @@ export async function createEvaluationRun(
       COUNT(erc.product_id)::INTEGER AS "candidatesSelected",
       COUNT(erc.product_id) FILTER (WHERE erc.status = 'completed')::INTEGER AS "evaluationsCompleted",
       COUNT(erc.product_id) FILTER (WHERE erc.status = 'failed')::INTEGER AS "evaluationsFailed",
-      COUNT(erc.product_id) FILTER (WHERE erc.status = 'pending')::INTEGER AS "pendingCandidates"
+      COUNT(erc.product_id) FILTER (WHERE erc.status IN ('pending', 'processing'))::INTEGER AS "pendingCandidates"
+      , er.batches_processed::INTEGER AS "batchesProcessed"
     FROM evaluation_runs er
     JOIN created_run ON created_run.id = er.id
     LEFT JOIN evaluation_run_candidates erc ON erc.run_id = er.id
@@ -182,26 +186,50 @@ export async function startEvaluationRun(sql: EvaluationRunSql, runId: string) {
   return rows.length > 0 ? loadRun(sql, runId) : null;
 }
 
-export async function loadNextEvaluationBatch(
+export async function recoverExpiredEvaluationCandidateClaims(
+  sql: EvaluationRunSql,
+  runId: string,
+) {
+  await sql`
+    UPDATE evaluation_run_candidates erc
+    SET status = CASE WHEN EXISTS (
+      SELECT 1 FROM product_evaluations pe
+      WHERE pe.product_id = erc.product_id
+        AND pe.evaluated_at >= erc.claimed_at
+    ) THEN 'completed' ELSE 'pending' END,
+    claimed_at = NULL
+    WHERE erc.run_id = ${runId}
+      AND erc.status = 'processing'
+      AND erc.claimed_at <= NOW() - INTERVAL '15 minutes'
+  `;
+}
+
+export async function claimNextEvaluationBatch(
   sql: EvaluationRunSql,
   runId: string,
   batchSize: number,
 ) {
-  if (!Number.isInteger(batchSize) || batchSize < 1) {
-    throw new Error("Evaluation batch size must be a positive integer.");
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 10) {
+    throw new Error("Evaluation batch size must be an integer from 1 to 10.");
   }
 
   const rows = await sql`
-    SELECT
-      product_id::TEXT AS "productId",
-      selection_position AS "selectionPosition"
-    FROM evaluation_run_candidates erc
-    JOIN evaluation_runs er ON er.id = erc.run_id
-    WHERE erc.run_id = ${runId}
-      AND er.status = 'running'
-      AND erc.status = 'pending'
-    ORDER BY erc.selection_position ASC
-    LIMIT ${batchSize}
+    WITH next_candidates AS (
+      SELECT erc.run_id, erc.product_id
+      FROM evaluation_run_candidates erc
+      JOIN evaluation_runs er ON er.id = erc.run_id
+      WHERE erc.run_id = ${runId}
+        AND er.status = 'running'
+        AND erc.status = 'pending'
+      ORDER BY erc.selection_position ASC
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE evaluation_run_candidates erc
+    SET status = 'processing', claimed_at = NOW()
+    FROM next_candidates next
+    WHERE erc.run_id = next.run_id AND erc.product_id = next.product_id
+    RETURNING erc.product_id::TEXT AS "productId", erc.selection_position AS "selectionPosition"
   `;
 
   return rows.map((row) => {
@@ -232,7 +260,7 @@ export async function recordEvaluationCandidateOutcome(
     SET status = ${input.status}
     WHERE run_id = ${input.runId}
       AND product_id = ${input.productId}
-      AND status = 'pending'
+      AND status = 'processing'
       AND EXISTS (
         SELECT 1
         FROM evaluation_runs
@@ -245,6 +273,9 @@ export async function recordEvaluationCandidateOutcome(
   return rows.length > 0;
 }
 
+/** @deprecated Use claimNextEvaluationBatch for durable processors. */
+export const loadNextEvaluationBatch = claimNextEvaluationBatch;
+
 export async function completeEvaluationRun(sql: EvaluationRunSql, runId: string) {
   const rows = await sql`
     UPDATE evaluation_runs er
@@ -255,12 +286,27 @@ export async function completeEvaluationRun(sql: EvaluationRunSql, runId: string
         SELECT 1
         FROM evaluation_run_candidates erc
         WHERE erc.run_id = er.id
-          AND erc.status = 'pending'
+          AND erc.status IN ('pending', 'processing')
       )
     RETURNING er.id
   `;
 
   return rows.length > 0 ? loadRun(sql, runId) : null;
+}
+
+export async function recordEvaluationBatchProcessed(
+  sql: EvaluationRunSql,
+  runId: string,
+) {
+  const rows = await sql`
+    UPDATE evaluation_runs
+    SET batches_processed = batches_processed + 1
+    WHERE id = ${runId}
+      AND status = 'running'
+    RETURNING id
+  `;
+
+  return rows.length > 0;
 }
 
 export async function markEvaluationRunNotificationSent(

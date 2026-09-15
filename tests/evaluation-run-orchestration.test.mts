@@ -24,6 +24,7 @@ mock.module("@neondatabase/serverless", {
           evaluationsCompleted: 0,
           evaluationsFailed: 0,
           pendingCandidates: 1,
+          batchesProcessed: 0,
         }];
       };
     },
@@ -31,7 +32,7 @@ mock.module("@neondatabase/serverless", {
 } as never);
 
 const { createEvaluationRunForWorkflow } = await import(
-  "../lib/vercel-workflow/evaluation-run-orchestration.mts"
+  "../workflows/evaluation-run-orchestration.ts"
 );
 
 test("the Vercel orchestration entry point delegates durable state creation to the application operation", async () => {
@@ -47,4 +48,13 @@ test("the Vercel orchestration entry point delegates durable state creation to t
   assert.match(query, /INSERT INTO evaluation_run_candidates/);
   assert.deepEqual(values, ["abc123", ["42"]]);
   assert.doesNotMatch(query, /gemini|slack/i);
+});
+
+test("the Vercel adapter contains the durable orchestration directives only at its boundary", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../workflows/evaluation-run-orchestration.ts", import.meta.url), "utf8"),
+  );
+  assert.match(source, /"use workflow"/);
+  assert.match(source, /"use step"/);
+  assert.match(source, /processEvaluationBatch/);
 });

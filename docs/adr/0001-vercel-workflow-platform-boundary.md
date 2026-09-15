@@ -55,7 +55,11 @@ state; Gemini is an evaluation service, and Slack remains a notification output.
   recommendation, or notification behavior.
 - Future durable-processing work may call application operations from a Vercel
   Workflow, but must not move application semantics into Vercel-specific APIs.
-- This decision does not introduce Vercel Workflow runtime code, evaluation-run
-  persistence, a generic queue or job abstraction, or any production cutover.
+- Slice 3 introduced evaluation-run persistence and Slice 4 introduces a small
+  Vercel Workflow adapter plus application-owned durable batch processing. The
+  adapter only invokes application operations; it does not own selection,
+  batching, retry, persistence, recommendation, or Slack rules.
+- This decision does not introduce a generic queue or job abstraction, or any
+  production cutover.
 - `/api/import-deals` and the behavior established by #34, #35, and #36 remain
   unchanged by this decision.

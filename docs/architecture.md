@@ -166,6 +166,10 @@ Gemini returns structured evaluation output.
 
 Persistent memory remains in DealRadar/Neon.
 
+Durable evaluation runs are application-owned Postgres state. The current
+Vercel Workflow adapter invokes bounded application batches, while persisted
+pending, processing, completed, and failed candidate state determines recovery.
+
 Gemini preferences are soft user guidance supplied to Gemini. Application
 settings are separate deterministic behavior. For Vinted, configured minimum
 article condition and excluded brands preselect eligible import candidates

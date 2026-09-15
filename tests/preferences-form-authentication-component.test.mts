@@ -129,4 +129,10 @@ test("Settings shows the default automatic Gemini evaluation limit as an integer
   assert.equal(input.type, "number");
   assert.equal(input.value, "50");
   assert.equal(input.min, "1");
+  const batchInput = container.querySelector<HTMLInputElement>("#workflow-batch-size");
+  assert.ok(batchInput);
+  assert.equal(batchInput.type, "number");
+  assert.equal(batchInput.value, "5");
+  assert.equal(batchInput.min, "1");
+  assert.equal(batchInput.max, "10");
 });

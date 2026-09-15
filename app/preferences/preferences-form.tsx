@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { vintedArticleConditions, type VintedSettings } from "@/lib/vinted-settings.mts";
-import { defaultGeminiSettings, maximumAutomaticEvaluationLimit, type GeminiSettings } from "@/lib/gemini-settings.mts";
+import { defaultGeminiSettings, maximumAutomaticEvaluationLimit, maximumWorkflowBatchSize, minimumWorkflowBatchSize, type GeminiSettings } from "@/lib/gemini-settings.mts";
 
 type SaveState =
   | "idle"
@@ -19,6 +19,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
   const [minimumCondition, setMinimumCondition] = useState(vinted.minimumCondition ?? "");
   const [excludedBrands, setExcludedBrands] = useState(vinted.excludedBrands);
   const [automaticEvaluationLimit, setAutomaticEvaluationLimit] = useState(gemini.automaticEvaluationLimit);
+  const [workflowBatchSize, setWorkflowBatchSize] = useState(gemini.workflowBatchSize);
   const [brandInput, setBrandInput] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
@@ -59,7 +60,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit } }),
+        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit, workflowBatchSize } }),
       });
       if (response.status === 401) return setSaveState("signInRequired");
       if (response.status === 403) return setSaveState("unauthorized");
@@ -125,6 +126,8 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
         <h2 className="text-sm font-medium text-zinc-700">Gemini</h2>
         <label htmlFor="automatic-evaluation-limit" className="mt-5 block text-sm font-medium text-zinc-700">Maximum automatic evaluations per import</label>
         <input id="automatic-evaluation-limit" type="number" min="1" max={maximumAutomaticEvaluationLimit} step="1" value={automaticEvaluationLimit} onChange={(event) => { setAutomaticEvaluationLimit(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
+        <label htmlFor="workflow-batch-size" className="mt-5 block text-sm font-medium text-zinc-700">Workflow evaluations per batch</label>
+        <input id="workflow-batch-size" type="number" min={minimumWorkflowBatchSize} max={maximumWorkflowBatchSize} step="1" value={workflowBatchSize} onChange={(event) => { setWorkflowBatchSize(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
       </div>
 
       <div className="mt-10 border-t border-zinc-200 pt-8">
