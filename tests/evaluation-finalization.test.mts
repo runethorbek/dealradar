@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { finalizeEvaluationRun } from "../lib/evaluation-finalization.mts";
+import type { EvaluationRun, EvaluationRunSql } from "../lib/evaluation-runs.mts";
+
+const completedRun: EvaluationRun = { id: "7", importRef: "abc", status: "completed", startedAt: "now", completedAt: "now", notificationSent: false, createdAt: "now", candidatesSelected: 2, evaluationsCompleted: 1, evaluationsFailed: 1, pendingCandidates: 0, batchesProcessed: 1 };
+
+test("finalizes completed persisted work once and uses successful persisted evaluations", async () => {
+  let claimed = false;
+  let sent = false;
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun, notificationSent: sent }];
+    if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }]; }
+    if (query.includes("SET notification_sent")) { sent = true; return [{ id: "7" }]; }
+    if (query.includes("import_summary")) return [{ importSummary: { ref: "abc", productsProcessed: 3, productsInserted: 2, productsUpdated: 1, snapshotsInserted: 3 }, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
+    throw new Error(query);
+  };
+  const messages: string[] = [];
+  const dependencies = { sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } };
+  assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: true, notificationSent: true });
+  assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: false, notificationSent: true });
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /3 processed.*2 new.*1 updated.*3 snapshots.*1 evaluated/);
+  assert.match(messages[0], /Top recommendation:\nA/);
+});
+
+test("does not finalize before all candidates are terminal", async () => {
+  let calls = 0;
+  const result = await finalizeEvaluationRun({ sql: async (strings) => { calls += 1; return strings.join("$parameter").includes("COUNT(erc.product_id)") ? [{ ...completedRun, status: "running", pendingCandidates: 1 }] : []; }, run: { ...completedRun, pendingCandidates: 1 }, postSlackMessage: async () => ({ success: true }) });
+  assert.deepEqual(result, { finalized: false, notificationSent: false });
+  assert.equal(calls, 1);
+});
+
+test("reloads terminality from Postgres instead of trusting a stale workflow snapshot", async () => {
+  let deliveries = 0;
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+    if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }];
+    if (query.includes("SET notification_sent")) return [{ id: "7" }];
+    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [];
+    if (query.includes("SET notification_claimed_at = NULL")) return [];
+    throw new Error(query);
+  };
+  await finalizeEvaluationRun({ sql, run: { ...completedRun, status: "running", pendingCandidates: 1 }, postSlackMessage: async () => { deliveries += 1; return { success: true }; } });
+  assert.equal(deliveries, 1);
+});
+
+test("a Slack failure remains terminal and cannot trigger another delivery or Gemini work", async () => {
+  let claimed = false;
+  let deliveries = 0;
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+    if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }]; }
+    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [];
+    if (query.includes("SET notification_claimed_at = NULL")) { claimed = false; return []; }
+    throw new Error(query);
+  };
+  const dependencies = { sql, run: completedRun, postSlackMessage: async () => { deliveries += 1; return { success: false, error: "unavailable" }; } };
+  await assert.rejects(finalizeEvaluationRun(dependencies), /can be retried/);
+  await assert.rejects(finalizeEvaluationRun(dependencies), /can be retried/);
+  assert.equal(deliveries, 2);
+});
+
+test("a thrown Slack error is non-fatal after the one persisted claim", async () => {
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+    if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }];
+    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [];
+    if (query.includes("SET notification_claimed_at = NULL")) return [];
+    throw new Error(query);
+  };
+  await assert.rejects(finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async () => { throw new Error("network"); } }), /can be retried/);
+});

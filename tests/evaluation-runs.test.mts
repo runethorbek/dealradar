@@ -9,6 +9,9 @@ import {
   recordEvaluationBatchProcessed,
   recordEvaluationCandidateOutcome,
   startEvaluationRun,
+  claimEvaluationRunLaunch,
+  markEvaluationRunLaunched,
+  releaseEvaluationRunLaunchClaim,
   type EvaluationRunSql,
 } from "../lib/evaluation-runs.mts";
 
@@ -49,7 +52,41 @@ test("creates a pending run with ordered candidate membership", async () => {
   assert.match(query, /INSERT INTO evaluation_runs/);
   assert.match(query, /INSERT INTO evaluation_run_candidates/);
   assert.match(query, /WITH ORDINALITY/);
-  assert.deepEqual(values, ["abc123", ["42", "9"]]);
+  assert.deepEqual(values, [
+    "abc123",
+    JSON.stringify({ ref: "abc123", productsProcessed: 0, productsInserted: 0, productsUpdated: 0, snapshotsInserted: 0, productsEvaluated: 0 }),
+    "[]",
+    ["42", "9"],
+  ]);
+});
+
+test("launch claiming is exclusive, releases failed starts, and marks only its owner", async () => {
+  let claimed: string | null = null;
+  let started = false;
+  const sql: EvaluationRunSql = async (strings, ...values) => {
+    const query = queryText(strings);
+    if (query.includes("SET launch_claim_token = md5")) {
+      if (claimed || started) return [];
+      claimed = "owner-a";
+      return [{ launchClaimToken: claimed }];
+    }
+    if (query.includes("SET launch_status = 'started'")) {
+      if (values.at(-1) !== claimed) return [];
+      started = true; claimed = null; return [{ id: "7" }];
+    }
+    if (query.includes("SET launch_claim_token = NULL")) {
+      if (values.at(-1) === claimed) claimed = null;
+      return [];
+    }
+    return [];
+  };
+  const first = await claimEvaluationRunLaunch(sql, "7");
+  assert.equal(first, "owner-a");
+  assert.equal(await claimEvaluationRunLaunch(sql, "7"), null);
+  await releaseEvaluationRunLaunchClaim(sql, "7", "owner-a");
+  assert.equal(await claimEvaluationRunLaunch(sql, "7"), "owner-a");
+  assert.equal(await markEvaluationRunLaunched(sql, "7", "stale"), false);
+  assert.equal(await markEvaluationRunLaunched(sql, "7", "owner-a"), true);
 });
 
 test("rejects missing, duplicate, and non-product candidate membership", async () => {

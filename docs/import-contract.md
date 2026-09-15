@@ -18,6 +18,11 @@ from `runethorbek/deals`, normally at one exact Git commit SHA. The importer
 reads all configured feeds for that revision, not only the source whose
 workflow triggered the import.
 
+An HTTP success means the feed data was persisted and, when candidates were
+selected, durable evaluation was enqueued. It does not wait for Gemini or the
+final Slack summary; the existing scraper trigger remains compatible because it
+only requires a successful import response.
+
 ## Import mapping
 
 DealRadar maps the source-specific producer fields as follows:

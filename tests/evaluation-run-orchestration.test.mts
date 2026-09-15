@@ -46,7 +46,12 @@ test("the Vercel orchestration entry point delegates durable state creation to t
   assert.equal(run.status, "pending");
   assert.match(query, /INSERT INTO evaluation_runs/);
   assert.match(query, /INSERT INTO evaluation_run_candidates/);
-  assert.deepEqual(values, ["abc123", ["42"]]);
+  assert.deepEqual(values, [
+    "abc123",
+    JSON.stringify({ ref: "abc123", productsProcessed: 0, productsInserted: 0, productsUpdated: 0, snapshotsInserted: 0, productsEvaluated: 0 }),
+    "[]",
+    ["42"],
+  ]);
   assert.doesNotMatch(query, /gemini|slack/i);
 });
 

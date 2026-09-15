@@ -12,7 +12,7 @@ function getSlackError(value: unknown) {
   return "unknown_error";
 }
 
-export async function postSlackMessage(text: string): Promise<SlackPostResult> {
+export async function postSlackMessage(text: string, clientMessageId?: string): Promise<SlackPostResult> {
   const botToken = process.env.SLACK_BOT_TOKEN;
   const channelId = process.env.SLACK_CHANNEL_ID;
 
@@ -27,7 +27,7 @@ export async function postSlackMessage(text: string): Promise<SlackPostResult> {
         Authorization: `Bearer ${botToken}`,
         "Content-Type": "application/json; charset=utf-8",
       },
-      body: JSON.stringify({ channel: channelId, text }),
+      body: JSON.stringify({ channel: channelId, text, ...(clientMessageId ? { client_msg_id: clientMessageId } : {}) }),
       cache: "no-store",
     });
     const result = (await response.json()) as {

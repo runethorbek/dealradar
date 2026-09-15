@@ -1,7 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { evaluateProduct } from "@/lib/product-evaluation";
 import {
-  evaluateCandidates,
   selectEvaluationCandidatesWithPreselection,
   type ImportEvaluationResult,
 } from "@/lib/import-evaluation.mts";
@@ -13,6 +11,8 @@ import {
 } from "@/lib/import-notification.mts";
 import { selectSlackHighlight } from "@/lib/slack-highlight.mts";
 import { postSlackMessage } from "@/lib/slack";
+import { createEvaluationRun } from "@/lib/evaluation-runs.mts";
+import { resumePendingEvaluationRunWorkflows, startEvaluationRunWorkflow } from "@/workflows/evaluation-run-orchestration";
 
 export const dynamic = "force-dynamic";
 
@@ -556,26 +556,39 @@ export async function POST(request: Request) {
     const geminiSettings = parseGeminiSettings(storedSettings?.gemini) ?? defaultGeminiSettings;
     const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings, geminiSettings.automaticEvaluationLimit);
     const evaluationCandidates = preselection.candidates;
-    const apiKey = process.env.GEMINI_API_KEY;
-    const evaluationRun = await evaluateCandidates(
-      evaluationCandidates,
-      apiKey
-        ? (candidate) =>
-            evaluateProduct({
-              productId: candidate.productId,
-              databaseUrl,
-              apiKey,
-            })
-        : null,
-    );
-    const { evaluatedProducts, metrics: evaluationMetrics } = evaluationRun;
-    const productsEvaluated = evaluatedProducts.length;
-    console.info("DealRadar automatic evaluation completed.", {
-      ...preselection.metrics,
-      ...evaluationMetrics,
-    });
+    const productsUpdated = products.length - productsInserted;
+    const snapshotsInserted = importResults.filter(
+      (result) => result.snapshotId,
+    ).length;
+    const evaluationMetrics = {
+      candidatesSelected: evaluationCandidates.length,
+      requestsAttempted: 0,
+      successfulEvaluations: 0,
+      failedEvaluations: 0,
+      retryAttempts: 0,
+      retryableFailures: 0,
+      rateLimitFailures: 0,
+      quotaFailures: 0,
+      permanentFailures: 0,
+      exhaustedRetries: 0,
+    };
+    let evaluationRunId: string | null = null;
+
+    if (evaluationCandidates.length > 0) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error("GEMINI_API_KEY is not configured on the server.");
+      await resumePendingEvaluationRunWorkflows({ databaseUrl, apiKey });
+      const evaluationRun = await createEvaluationRun(sql, {
+        importRef: ref,
+        candidateProductIds: evaluationCandidates.map((candidate) => candidate.productId),
+        importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings },
+      });
+      evaluationRunId = evaluationRun.id;
+      await startEvaluationRunWorkflow({ databaseUrl, apiKey, runId: evaluationRun.id });
+    }
+    console.info("DealRadar durable evaluation initiated.", { ...preselection.metrics, evaluationRunId });
     const productIds = [...new Set(importResults.map((result) => result.productId))];
-    const highlightStateRows = productIds.length
+    const highlightStateRows = evaluationCandidates.length === 0 && productIds.length
       ? await sql`
           SELECT
             p.id::TEXT AS "productId",
@@ -604,40 +617,23 @@ export async function POST(request: Request) {
         },
       ]),
     );
-    const slackHighlight = selectSlackHighlight(
+    const slackHighlight = evaluationCandidates.length === 0 ? selectSlackHighlight(
       importResults.flatMap((result) => {
         const state = highlightStateByProductId.get(result.productId);
 
         return state ? [{ ...result, ...state }] : [];
       }),
-    );
-    const productsUpdated = products.length - productsInserted;
-    const snapshotsInserted = importResults.filter(
-      (result) => result.snapshotId,
-    ).length;
-    const slackMessage = formatImportSlackMessage(
-      {
-        ref,
-        productsProcessed: products.length,
-        productsInserted,
-        productsUpdated,
-        snapshotsInserted,
-        productsEvaluated,
-      },
-      slackHighlight,
-      partialScanWarnings,
-    );
-
-    try {
-      const slackResult = await postSlackMessage(slackMessage);
-
-      if (!slackResult.success) {
-        console.warn(
-          `DealRadar Slack notification failed: ${slackResult.error}.`,
-        );
+    ) : null;
+    // There is no durable work to finalize when nothing was selected, so retain
+    // one useful import notification without creating a stranded empty run.
+    if (evaluationCandidates.length === 0) {
+      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, slackHighlight, partialScanWarnings);
+      try {
+        const slackResult = await postSlackMessage(slackMessage);
+        if (!slackResult.success) console.warn(`DealRadar Slack notification failed: ${slackResult.error}.`);
+      } catch {
+        console.warn("DealRadar Slack notification failed: unexpected_error.");
       }
-    } catch {
-      console.warn("DealRadar Slack notification failed: unexpected_error.");
     }
 
     return Response.json({
@@ -648,7 +644,8 @@ export async function POST(request: Request) {
       productsInserted,
       productsUpdated,
       snapshotsInserted,
-      productsEvaluated,
+      productsEvaluated: 0,
+      evaluationRunId,
       productsSkippedInvalidPrice,
       evaluationMetrics,
       preselectionMetrics: preselection.metrics,

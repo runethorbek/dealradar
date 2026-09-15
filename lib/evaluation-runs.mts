@@ -16,6 +16,14 @@ export type EvaluationRun = {
   batchesProcessed: number;
 };
 
+export type EvaluationRunImportContext = {
+  productsProcessed: number;
+  productsInserted: number;
+  productsUpdated: number;
+  snapshotsInserted: number;
+  scanWarnings: unknown[];
+};
+
 export type EvaluationRunCandidate = {
   productId: string;
   selectionPosition: number;
@@ -117,7 +125,7 @@ async function loadRun(sql: EvaluationRunSql, runId: string) {
 
 export async function createEvaluationRun(
   sql: EvaluationRunSql,
-  input: { importRef: string; candidateProductIds: string[] },
+  input: { importRef: string; candidateProductIds: string[]; importContext?: EvaluationRunImportContext },
 ) {
   const productIds = uniqueProductIds(input.candidateProductIds);
 
@@ -127,8 +135,8 @@ export async function createEvaluationRun(
 
   const [row] = await sql`
     WITH created_run AS (
-      INSERT INTO evaluation_runs (import_ref)
-      VALUES (${input.importRef})
+      INSERT INTO evaluation_runs (import_ref, import_summary, scan_warnings)
+      VALUES (${input.importRef}, ${JSON.stringify({ ref: input.importRef, productsProcessed: input.importContext?.productsProcessed ?? 0, productsInserted: input.importContext?.productsInserted ?? 0, productsUpdated: input.importContext?.productsUpdated ?? 0, snapshotsInserted: input.importContext?.snapshotsInserted ?? 0, productsEvaluated: 0 })}::JSONB, ${JSON.stringify(input.importContext?.scanWarnings ?? [])}::JSONB)
       RETURNING id
     ), created_candidates AS (
       INSERT INTO evaluation_run_candidates (
@@ -184,6 +192,46 @@ export async function startEvaluationRun(sql: EvaluationRunSql, runId: string) {
   `;
 
   return rows.length > 0 ? loadRun(sql, runId) : null;
+}
+
+export async function loadPendingEvaluationRunIds(sql: EvaluationRunSql) {
+  const rows = await sql`
+    SELECT id::TEXT AS "id" FROM evaluation_runs
+    WHERE status = 'pending' AND launch_status = 'pending'
+    ORDER BY id ASC
+  `;
+  return rows.flatMap((row) => typeof row.id === "string" && /^\d+$/.test(row.id) ? [row.id] : []);
+}
+
+export async function claimEvaluationRunLaunch(sql: EvaluationRunSql, runId: string) {
+  const rows = await sql`
+    UPDATE evaluation_runs
+    SET launch_claim_token = md5(clock_timestamp()::TEXT || random()::TEXT || id::TEXT), launch_claimed_at = NOW()
+    WHERE id = ${runId} AND status = 'pending' AND launch_status = 'pending'
+      AND (launch_claimed_at IS NULL OR launch_claimed_at <= NOW() - INTERVAL '5 minutes')
+    RETURNING launch_claim_token AS "launchClaimToken"
+  `;
+  const token = rows[0]?.launchClaimToken;
+  return typeof token === "string" && token ? token : null;
+}
+
+export async function markEvaluationRunLaunched(sql: EvaluationRunSql, runId: string, claimToken: string) {
+  const rows = await sql`
+    UPDATE evaluation_runs
+    SET launch_status = 'started', launch_started_at = NOW(), launch_attempts = launch_attempts + 1,
+      launch_claim_token = NULL, launch_claimed_at = NULL
+    WHERE id = ${runId} AND status = 'pending' AND launch_status = 'pending'
+      AND launch_claim_token = ${claimToken}
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
+export async function releaseEvaluationRunLaunchClaim(sql: EvaluationRunSql, runId: string, claimToken: string) {
+  await sql`
+    UPDATE evaluation_runs SET launch_claim_token = NULL, launch_claimed_at = NULL
+    WHERE id = ${runId} AND launch_status = 'pending' AND launch_claim_token = ${claimToken}
+  `;
 }
 
 export async function recoverExpiredEvaluationCandidateClaims(
@@ -312,15 +360,53 @@ export async function recordEvaluationBatchProcessed(
 export async function markEvaluationRunNotificationSent(
   sql: EvaluationRunSql,
   runId: string,
+  claimToken?: string,
 ) {
   const rows = await sql`
     UPDATE evaluation_runs
-    SET notification_sent = TRUE
+    SET notification_sent = TRUE, notification_claimed_at = NOW()
     WHERE id = ${runId}
       AND status = 'completed'
       AND notification_sent = FALSE
+      AND (${claimToken ?? null}::TEXT IS NULL OR notification_claim_token = ${claimToken ?? null})
     RETURNING id
   `;
 
   return rows.length > 0;
+}
+
+export async function claimEvaluationRunNotification(
+  sql: EvaluationRunSql,
+  runId: string,
+) {
+  const rows = await sql`
+    UPDATE evaluation_runs
+    SET notification_claimed_at = NOW(),
+      notification_client_message_id = COALESCE(notification_client_message_id, concat(substr(md5('dealradar:evaluation-run:' || id::TEXT), 1, 8), '-', substr(md5('dealradar:evaluation-run:' || id::TEXT), 9, 4), '-4', substr(md5('dealradar:evaluation-run:' || id::TEXT), 14, 3), '-8', substr(md5('dealradar:evaluation-run:' || id::TEXT), 18, 3), '-', substr(md5('dealradar:evaluation-run:' || id::TEXT), 21, 12))),
+      notification_claim_token = md5(clock_timestamp()::TEXT || random()::TEXT || id::TEXT)
+    WHERE id = ${runId}
+      AND status = 'completed'
+      AND notification_sent = FALSE
+      AND (
+        notification_claimed_at IS NULL
+        OR notification_claimed_at <= NOW() - INTERVAL '15 minutes'
+      )
+    RETURNING notification_client_message_id AS "notificationClientMessageId", notification_claim_token AS "notificationClaimToken"
+  `;
+  const value = rows[0]?.notificationClientMessageId;
+  const token = rows[0]?.notificationClaimToken;
+  return typeof value === "string" && value && typeof token === "string" && token ? { clientMessageId: value, claimToken: token } : null;
+}
+
+export async function releaseEvaluationRunNotificationClaim(
+  sql: EvaluationRunSql,
+  runId: string, claimToken: string,
+) {
+  await sql`
+    UPDATE evaluation_runs
+    SET notification_claimed_at = NULL, notification_claim_token = NULL
+    WHERE id = ${runId}
+      AND notification_sent = FALSE
+      AND notification_claim_token = ${claimToken}
+  `;
 }

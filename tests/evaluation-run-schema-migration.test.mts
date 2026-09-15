@@ -45,3 +45,35 @@ test("evaluation-run candidate claims persist processing recovery state", async 
   assert.match(migration, /evaluation_run_candidates_processing_idx/i);
   assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM/i);
 });
+
+test("evaluation-run finalization stores import context and notification claim state", async () => {
+  const migration = await readFile(new URL("../migrations/017_evaluation_run_finalization.sql", import.meta.url), "utf8");
+  assert.match(migration, /import_summary JSONB/i);
+  assert.match(migration, /scan_warnings JSONB/i);
+  assert.match(migration, /notification_claimed_at TIMESTAMPTZ/i);
+  assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM/i);
+});
+
+test("notification recovery and lease migrations remain additive", async () => {
+  const recovery = await readFile(new URL("../migrations/018_evaluation_run_notification_recovery.sql", import.meta.url), "utf8");
+  const idempotency = await readFile(new URL("../migrations/019_evaluation_run_slack_idempotency.sql", import.meta.url), "utf8");
+  const lease = await readFile(new URL("../migrations/020_evaluation_run_notification_lease_tokens.sql", import.meta.url), "utf8");
+  assert.match(recovery, /notification_claimed_at/i);
+  assert.match(idempotency, /notification_client_message_id/i);
+  assert.match(lease, /notification_claim_token/i);
+  assert.doesNotMatch(`${recovery}${idempotency}${lease}`, /DROP TABLE|DELETE\s+FROM/i);
+});
+
+test("launch recovery migration persists a minimal pending/started state", async () => {
+  const migration = await readFile(new URL("../migrations/021_evaluation_run_launch_recovery.sql", import.meta.url), "utf8");
+  assert.match(migration, /launch_status/i);
+  assert.match(migration, /launch_attempts/i);
+  assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM/i);
+});
+
+test("launch claims are additive and persisted", async () => {
+  const migration = await readFile(new URL("../migrations/022_evaluation_run_launch_claims.sql", import.meta.url), "utf8");
+  assert.match(migration, /launch_claim_token/i);
+  assert.match(migration, /launch_claimed_at/i);
+  assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM/i);
+});

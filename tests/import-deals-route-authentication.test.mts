@@ -10,6 +10,8 @@ let neonCalls = 0;
 let persistenceCalls = 0;
 let evaluationCalls = 0;
 let slackCalls = 0;
+let workflowStarts = 0;
+let evaluationRunsCreated = 0;
 let persistedQueries: Array<{ text: string; values: unknown[] }> = [];
 let transactionResultFactory: ((query: {
   text: string;
@@ -90,6 +92,20 @@ mockModule("@/lib/slack", {
     return { success: true };
   },
 });
+mockModule("@/lib/evaluation-runs.mts", {
+  createEvaluationRun: async (_sql: unknown, input: { importRef: string; candidateProductIds: string[] }) => {
+    evaluationRunsCreated += 1;
+    return ({
+    id: "durable-run-7", importRef: input.importRef, status: "pending", startedAt: null, completedAt: null,
+    notificationSent: false, createdAt: "2026-09-15T00:00:00.000Z", candidatesSelected: input.candidateProductIds.length,
+    evaluationsCompleted: 0, evaluationsFailed: 0, pendingCandidates: input.candidateProductIds.length, batchesProcessed: 0,
+    });
+  },
+});
+mockModule("@/workflows/evaluation-run-orchestration", {
+  startEvaluationRunWorkflow: async () => { workflowStarts += 1; return { id: "workflow-run" }; },
+  resumePendingEvaluationRunWorkflows: async () => [],
+});
 
 const { POST } = await import("../app/api/import-deals/route.ts");
 
@@ -112,6 +128,8 @@ function reset() {
   persistenceCalls = 0;
   evaluationCalls = 0;
   slackCalls = 0;
+  workflowStarts = 0;
+  evaluationRunsCreated = 0;
   persistedQueries = [];
   transactionResultFactory = null;
   storedGeminiSettings = undefined;
@@ -219,10 +237,10 @@ test("preserves the import flow for a valid bearer credential", async () => {
   ]);
   assert.equal(neonCalls, 1);
   assert.equal(persistenceCalls, 1);
-  assert.equal(evaluationCalls, 1);
-  assert.equal(slackCalls, 1);
-  assert.equal(persistedQueries.length, 4);
-  assert.ok(persistedQueries.every((query) => !query.text.includes("evaluation_runs")));
+  assert.equal(evaluationCalls, 0);
+  assert.equal(workflowStarts, 1);
+  assert.equal(slackCalls, 0);
+  assert.equal(persistedQueries.length, 3);
 
   for (const query of persistedQueries.filter((query) =>
     query.text.includes("INSERT INTO products"),
@@ -251,12 +269,13 @@ test("preserves the import flow for a valid bearer credential", async () => {
     productsInserted: 2,
     productsUpdated: 0,
     snapshotsInserted: 2,
-    productsEvaluated: 1,
+    productsEvaluated: 0,
+    evaluationRunId: "durable-run-7",
     productsSkippedInvalidPrice: 0,
     evaluationMetrics: {
       candidatesSelected: 1,
-      requestsAttempted: 1,
-      successfulEvaluations: 1,
+      requestsAttempted: 0,
+      successfulEvaluations: 0,
       failedEvaluations: 0,
       retryAttempts: 0,
       retryableFailures: 0,
@@ -311,10 +330,29 @@ test("uses the persisted Gemini automatic evaluation limit during import candida
   const response = await POST(importRequest("Bearer valid-ingest-key"));
 
   assert.equal(response.status, 200);
-  assert.equal(evaluationCalls, 10);
+  assert.equal(evaluationCalls, 0);
+  assert.equal(workflowStarts, 1);
   const body = await response.json();
-  assert.equal(body.productsEvaluated, 10);
+  assert.equal(body.productsEvaluated, 0);
   assert.equal(body.preselectionMetrics.candidatesSelected, 10);
+});
+
+test("zero-candidate imports send one direct summary without durable work", async () => {
+  reset();
+  transactionResultFactory = () => ({
+    productId: "42", externalUrl: "https://example.com/existing", title: "Existing", currentPrice: "1200", currency: "DKK",
+    sourceCurrentPrice: null, sourceCurrency: null, hidden: false, inserted: false, snapshotId: "snapshot-42",
+    priceChanged: false, priceDropPercent: null, discountPercent: null,
+  });
+  globalThis.fetch = async (input) => Response.json(validFeed(String(input)));
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+  assert.equal(response.status, 200);
+  assert.equal(evaluationRunsCreated, 0);
+  assert.equal(workflowStarts, 0);
+  assert.equal(slackCalls, 1);
+  const body = await response.json();
+  assert.equal(body.evaluationRunId, null);
+  assert.equal(body.productsEvaluated, 0);
 });
 
 test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {
