@@ -100,6 +100,10 @@ export async function getLatestDashboardProducts(
           p.title,
           p.image_url AS "imageUrl",
           p.source,
+          p.brand,
+          p.raw_data ->> 'listing_text' AS "listingText",
+          p.raw_data ->> 'article_condition' AS "articleCondition",
+          p.raw_data ->> 'size_guess' AS "sizeGuess",
           p.current_price::TEXT AS "currentPrice",
           p.original_price::TEXT AS "originalPrice",
           p.currency,
@@ -114,6 +118,7 @@ export async function getLatestDashboardProducts(
               'preferenceScore', pe.preference_score,
               'dealScore', pe.deal_score,
               'reason', pe.reason,
+              'translatedListingTextDa', pe.translated_listing_text_da,
               'evaluatedAt', pe.evaluated_at::TEXT
             )
           END AS evaluation,
@@ -148,6 +153,10 @@ export async function getLatestDashboardProducts(
           p.title,
           p.image_url AS "imageUrl",
           p.source,
+          p.brand,
+          p.raw_data ->> 'listing_text' AS "listingText",
+          p.raw_data ->> 'article_condition' AS "articleCondition",
+          p.raw_data ->> 'size_guess' AS "sizeGuess",
           p.current_price::TEXT AS "currentPrice",
           p.original_price::TEXT AS "originalPrice",
           p.currency,
@@ -162,6 +171,7 @@ export async function getLatestDashboardProducts(
               'preferenceScore', pe.preference_score,
               'dealScore', pe.deal_score,
               'reason', pe.reason,
+              'translatedListingTextDa', pe.translated_listing_text_da,
               'evaluatedAt', pe.evaluated_at::TEXT
             )
           END AS evaluation,
@@ -205,6 +215,10 @@ export async function getLatestDashboardProducts(
       p.title,
       p.image_url AS "imageUrl",
       p.source,
+      p.brand,
+      p.raw_data ->> 'listing_text' AS "listingText",
+      p.raw_data ->> 'article_condition' AS "articleCondition",
+      p.raw_data ->> 'size_guess' AS "sizeGuess",
       p.current_price::TEXT AS "currentPrice",
       p.original_price::TEXT AS "originalPrice",
       p.currency,
@@ -219,6 +233,7 @@ export async function getLatestDashboardProducts(
           'preferenceScore', pe.preference_score,
           'dealScore', pe.deal_score,
           'reason', pe.reason,
+          'translatedListingTextDa', pe.translated_listing_text_da,
           'evaluatedAt', pe.evaluated_at::TEXT
         )
       END AS evaluation,

@@ -48,6 +48,12 @@ The original product object is retained as `raw_data` for diagnostics and
 future migrations. This is not a substitute for normalized application fields.
 For Vinted, evaluation may read `monitor_ids` from this preserved object as
 non-authoritative discovery context; it is not duplicated into a product field.
+For Vinted, evaluation and display also read the specific bounded
+`listing_text`, `article_condition`, and `size_guess` fields from this
+preserved object; arbitrary `raw_data` is never passed to Gemini. Gemini's
+Danish translation of `listing_text` is persisted as evaluation enrichment
+(`product_evaluations.translated_listing_text_da`), not as a product field or
+a preformatted display title.
 
 ## Application normalization and persistence
 

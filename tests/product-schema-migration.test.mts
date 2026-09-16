@@ -12,3 +12,15 @@ test("product schema migration removes target size and category columns", async 
   assert.match(migration, /DROP COLUMN category/i);
   assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM|UPDATE\s+products/i);
 });
+
+test("evaluation translated listing text migration is additive and nullable", async () => {
+  const migration = await readFile(
+    new URL("../migrations/023_evaluation_translated_listing_text.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(migration, /ALTER TABLE product_evaluations/i);
+  assert.match(migration, /ADD COLUMN translated_listing_text_da TEXT/i);
+  assert.doesNotMatch(migration, /NOT NULL/i);
+  assert.doesNotMatch(migration, /DROP TABLE|DROP COLUMN|DELETE\s+FROM|UPDATE\s+product_evaluations/i);
+});

@@ -16,6 +16,16 @@ let geminiContents = "";
 let geminiSystemInstruction = "";
 let productSource = "vinted.com";
 let productRawData: unknown = {};
+let geminiResponseFields: Record<string, unknown> = defaultGeminiResponseFields();
+let insertedTranslatedListingTextDa: unknown;
+
+function defaultGeminiResponseFields() {
+  return {
+    preferenceScore: 8,
+    dealScore: 7,
+    reason: "Strong preference match at a good price.",
+  };
+}
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -37,7 +47,7 @@ mockModule("@neondatabase/serverless", {
   neon: () => {
     neonCalls += 1;
 
-    return async (strings: TemplateStringsArray) => {
+    return async (strings: TemplateStringsArray, ...values: unknown[]) => {
       persistenceCalls += 1;
       const query = strings.join(" ");
 
@@ -53,12 +63,17 @@ mockModule("@neondatabase/serverless", {
       if (query.includes("FROM product_feedback")) return [];
       if (query.includes("FROM product_snapshots")) return [];
 
+      // INSERT INTO product_evaluations (product_id, preference_score, deal_score, reason, translated_listing_text_da)
+      const [productId, preferenceScore, dealScore, reason, translatedListingTextDa] = values;
+      insertedTranslatedListingTextDa = translatedListingTextDa;
+
       return [
         {
-          productId: "42",
-          preferenceScore: 8,
-          dealScore: 7,
-          reason: "Strong preference match at a good price.",
+          productId,
+          preferenceScore,
+          dealScore,
+          reason,
+          translatedListingTextDa,
           evaluatedAt: "2026-08-30T12:00:00.000Z",
         },
       ];
@@ -78,13 +93,7 @@ mockModule("@google/genai", {
         geminiRequestCalls += 1;
         geminiContents = contents;
         geminiSystemInstruction = config.systemInstruction;
-        return {
-          text: JSON.stringify({
-            preferenceScore: 8,
-            dealScore: 7,
-            reason: "Strong preference match at a good price.",
-          }),
-        };
+        return { text: JSON.stringify(geminiResponseFields) };
       },
     };
 
@@ -118,6 +127,8 @@ function reset(nextSession: typeof session) {
   geminiSystemInstruction = "";
   productSource = "vinted.com";
   productRawData = {};
+  geminiResponseFields = defaultGeminiResponseFields();
+  insertedTranslatedListingTextDa = undefined;
 }
 
 function getEvaluationContext() {
@@ -191,6 +202,7 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
       preferenceScore: 8,
       dealScore: 7,
       reason: "Strong preference match at a good price.",
+      translatedListingTextDa: null,
       evaluatedAt: "2026-08-30T12:00:00.000Z",
     },
   });
@@ -261,4 +273,132 @@ test("excludes invalid and excessive Vinted monitor IDs from evaluation context"
     "vinted-mens-blazers-size-s",
     ...Array.from({ length: 19 }, (_, index) => `vinted-monitor-${index}`),
   ]);
+});
+
+test("includes only the bounded Vinted listing text in Gemini context, without leaking other raw_data", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  productRawData = {
+    listing_text: "granatowa marynarka z metką",
+    article_condition: "Ny med prismærker",
+    size_guess: "S",
+    brand: "Should not leak from raw_data",
+    unrelated_field: "should-not-leak",
+  };
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    getEvaluationContext().product.listingText,
+    "granatowa marynarka z metką",
+  );
+  assert.doesNotMatch(
+    geminiContents,
+    /article_condition|size_guess|should-not-leak/,
+  );
+});
+
+test("omits listing text context when Vinted listing text is unavailable", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 200);
+  assert.equal("listingText" in getEvaluationContext().product, false);
+});
+
+test("persists a valid Danish translation returned by Gemini", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  productRawData = { listing_text: "granatowa marynarka z metką" };
+  geminiResponseFields.translatedListingTextDa = "Granatrød blazer med mærke";
+
+  const response = await POST(evaluationRequest());
+  const body = (await response.json()) as { evaluation: { translatedListingTextDa: unknown } };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.evaluation.translatedListingTextDa, "Granatrød blazer med mærke");
+  assert.equal(insertedTranslatedListingTextDa, "Granatrød blazer med mærke");
+});
+
+test("a missing translation field still yields a successful evaluation with valid scores and reason", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  delete geminiResponseFields.translatedListingTextDa;
+
+  const response = await POST(evaluationRequest());
+  const body = (await response.json()) as {
+    evaluation: { preferenceScore: unknown; dealScore: unknown; reason: unknown; translatedListingTextDa: unknown };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.evaluation.translatedListingTextDa, null);
+  assert.equal(body.evaluation.preferenceScore, 8);
+  assert.equal(body.evaluation.dealScore, 7);
+  assert.equal(body.evaluation.reason, "Strong preference match at a good price.");
+});
+
+test("a null translation still yields a successful evaluation with valid scores and reason", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  geminiResponseFields.translatedListingTextDa = null;
+
+  const response = await POST(evaluationRequest());
+  const body = (await response.json()) as { evaluation: { translatedListingTextDa: unknown } };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.evaluation.translatedListingTextDa, null);
+  assert.equal(insertedTranslatedListingTextDa, null);
+});
+
+test("an invalid translation type degrades to null without invalidating otherwise valid scores and reason", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  geminiResponseFields.translatedListingTextDa = 12345;
+
+  const response = await POST(evaluationRequest());
+  const body = (await response.json()) as {
+    evaluation: { preferenceScore: unknown; dealScore: unknown; translatedListingTextDa: unknown };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.evaluation.translatedListingTextDa, null);
+  assert.equal(body.evaluation.preferenceScore, 8);
+  assert.equal(body.evaluation.dealScore, 7);
+});
+
+test("an oversized translation degrades to null without invalidating otherwise valid scores and reason", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  geminiResponseFields.translatedListingTextDa = "x".repeat(301);
+
+  const response = await POST(evaluationRequest());
+  const body = (await response.json()) as { evaluation: { translatedListingTextDa: unknown } };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.evaluation.translatedListingTextDa, null);
+});
+
+test("strict validation of preferenceScore, dealScore, and reason remains unchanged", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  geminiResponseFields.preferenceScore = 11;
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 500);
+  assert.equal(geminiRequestCalls, 1);
+});
+
+test("an unexpected field alongside a valid translation still rejects the evaluation", async () => {
+  const user = { email: "owner@example.com", emailVerified: true };
+  reset({ user });
+  geminiResponseFields.translatedListingTextDa = "Granatrød blazer med mærke";
+  geminiResponseFields.unexpectedField = "not allowed";
+
+  const response = await POST(evaluationRequest());
+
+  assert.equal(response.status, 500);
 });

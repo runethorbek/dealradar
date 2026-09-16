@@ -10,6 +10,7 @@ import type {
   Rating,
 } from "@/lib/dashboard-product.mts";
 import { getPriceHistorySummary } from "@/lib/price-history-summary.mts";
+import { getProductDisplayTitle } from "@/lib/vinted-display-title.mts";
 
 export type { ProductCardProduct, ProductEvaluation, Rating };
 
@@ -31,6 +32,8 @@ function isProductEvaluation(value: unknown): value is ProductEvaluation {
     evaluation.dealScore <= 10 &&
     typeof evaluation.reason === "string" &&
     evaluation.reason.length > 0 &&
+    (evaluation.translatedListingTextDa === null ||
+      typeof evaluation.translatedListingTextDa === "string") &&
     typeof evaluation.evaluatedAt === "string"
   );
 }
@@ -367,7 +370,7 @@ export function ProductCard({
           </div>
 
           <h3 className="mt-2 line-clamp-2 min-h-12 text-base font-semibold leading-6 tracking-tight group-hover:text-zinc-600">
-            {product.title}
+            {getProductDisplayTitle({ ...product, evaluation })}
           </h3>
 
           <div className="mt-4 flex items-baseline gap-2">
