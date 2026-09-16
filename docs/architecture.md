@@ -183,6 +183,36 @@ before the existing evaluation ranking and configured automatic-evaluation
 limit (default 50); Zalando does not use these rules. Missing or unknown
 Vinted condition and brand values are eligible.
 
+### Evaluation prioritization policy
+
+DealRadar prioritizes current products deterministically per import.
+Historical evaluation completeness is not a system goal. Four concerns are
+distinct and must not be conflated:
+
+- **Candidate selection** decides which products are eligible at all: Zalando
+  candidates are new or price-changed products; Vinted candidates additionally
+  pass the deterministic brand/condition preselection above. Both are ordered
+  deterministically (new products first, then by price-drop and discount
+  percentage).
+- **Configured workload limit** (`automaticEvaluationLimit`, default 50)
+  bounds how many of those ordered candidates one import selects. Eligible
+  candidates beyond the limit are intentionally skipped for that import. They
+  are not written to any table and are not queued for a later run — DealRadar
+  prioritizes the current import's most relevant deals over evaluating every
+  eligible product eventually.
+- **Durable recovery** only applies after a candidate has been selected and
+  persisted as `evaluation_run_candidates` state. From that point, the
+  existing durable batch processor owns it until it reaches a terminal
+  `completed` or `failed` outcome, including recovering interrupted
+  pending/processing work. Recovery never reaches back to reconsider products
+  that were never selected.
+- **Historical backfill** — re-evaluating products that were skipped by the
+  limit, excluded by preselection, or left `failed` after exhausting retries —
+  is explicitly not implemented. There is no backlog/queue mechanism; a
+  terminal failure is a terminal outcome, not a retry candidate. See #12 and
+  #43: the durable evaluation-run architecture was assessed against this
+  question and no backfill mechanism was added.
+
 See:
 
 - `docs/ubiquitous-language.md`

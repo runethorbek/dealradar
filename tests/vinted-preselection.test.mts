@@ -76,3 +76,34 @@ test("automatic evaluation limit changes only the cutoff, not candidate ordering
   const limited = selectEvaluationCandidatesWithPreselection(results, undefined, 3).candidates.map((item) => item.productId);
   assert.deepEqual(limited, all.slice(0, 3));
 });
+
+test("Zalando eligibility is new-or-price-changed regardless of Vinted brand/condition rules", () => {
+  const results = [
+    candidate("zalando-inserted", { source: "zalando.dk", inserted: true, priceChanged: false, brand: "Zara" }),
+    candidate("zalando-price-changed", { source: "zalando.dk", inserted: false, priceChanged: true, brand: "Zara" }),
+    candidate("zalando-unchanged", { source: "zalando.dk", inserted: false, priceChanged: false, brand: "Zara" }),
+  ];
+
+  const { candidates } = selectEvaluationCandidatesWithPreselection(results, {
+    minimumCondition: "Ny med prismærker",
+    excludedBrands: ["zara"],
+  });
+
+  assert.deepEqual(
+    candidates.map((item) => item.productId).sort(),
+    ["zalando-inserted", "zalando-price-changed"],
+  );
+});
+
+test("candidates beyond the configured limit are excluded from the selected set, not merely uncounted", () => {
+  const results = Array.from({ length: 5 }, (_, index) =>
+    candidate(`candidate-${index}`, { priceDropPercent: String(50 - index) }),
+  );
+
+  const { candidates } = selectEvaluationCandidatesWithPreselection(results, undefined, 2);
+
+  assert.deepEqual(candidates.map((item) => item.productId), ["candidate-0", "candidate-1"]);
+  assert.ok(!candidates.some((item) => item.productId === "candidate-2"));
+  assert.ok(!candidates.some((item) => item.productId === "candidate-3"));
+  assert.ok(!candidates.some((item) => item.productId === "candidate-4"));
+});
