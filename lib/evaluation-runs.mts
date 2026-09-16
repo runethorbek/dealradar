@@ -137,7 +137,7 @@ export async function createEvaluationRun(
     WITH created_run AS (
       INSERT INTO evaluation_runs (import_ref, import_summary, scan_warnings)
       VALUES (${input.importRef}, ${JSON.stringify({ ref: input.importRef, productsProcessed: input.importContext?.productsProcessed ?? 0, productsInserted: input.importContext?.productsInserted ?? 0, productsUpdated: input.importContext?.productsUpdated ?? 0, snapshotsInserted: input.importContext?.snapshotsInserted ?? 0, productsEvaluated: 0 })}::JSONB, ${JSON.stringify(input.importContext?.scanWarnings ?? [])}::JSONB)
-      RETURNING id
+      RETURNING id, import_ref, status, started_at, completed_at, notification_sent, created_at, batches_processed
     ), created_candidates AS (
       INSERT INTO evaluation_run_candidates (
         run_id,
@@ -151,24 +151,32 @@ export async function createEvaluationRun(
       FROM created_run
       CROSS JOIN UNNEST(${productIds}::TEXT[]) WITH ORDINALITY
         AS selected(product_id, selection_position)
+      RETURNING product_id
     )
     SELECT
-      er.id::TEXT AS "id",
-      er.import_ref AS "importRef",
-      er.status,
-      er.started_at::TEXT AS "startedAt",
-      er.completed_at::TEXT AS "completedAt",
-      er.notification_sent AS "notificationSent",
-      er.created_at::TEXT AS "createdAt",
-      COUNT(erc.product_id)::INTEGER AS "candidatesSelected",
-      COUNT(erc.product_id) FILTER (WHERE erc.status = 'completed')::INTEGER AS "evaluationsCompleted",
-      COUNT(erc.product_id) FILTER (WHERE erc.status = 'failed')::INTEGER AS "evaluationsFailed",
-      COUNT(erc.product_id) FILTER (WHERE erc.status IN ('pending', 'processing'))::INTEGER AS "pendingCandidates"
-      , er.batches_processed::INTEGER AS "batchesProcessed"
-    FROM evaluation_runs er
-    JOIN created_run ON created_run.id = er.id
-    LEFT JOIN evaluation_run_candidates erc ON erc.run_id = er.id
-    GROUP BY er.id
+      created_run.id::TEXT AS "id",
+      created_run.import_ref AS "importRef",
+      created_run.status,
+      created_run.started_at::TEXT AS "startedAt",
+      created_run.completed_at::TEXT AS "completedAt",
+      created_run.notification_sent AS "notificationSent",
+      created_run.created_at::TEXT AS "createdAt",
+      created_run.batches_processed::INTEGER AS "batchesProcessed",
+      COUNT(created_candidates.product_id)::INTEGER AS "candidatesSelected",
+      0::INTEGER AS "evaluationsCompleted",
+      0::INTEGER AS "evaluationsFailed",
+      COUNT(created_candidates.product_id)::INTEGER AS "pendingCandidates"
+    FROM created_run
+    LEFT JOIN created_candidates ON TRUE
+    GROUP BY
+      created_run.id,
+      created_run.import_ref,
+      created_run.status,
+      created_run.started_at,
+      created_run.completed_at,
+      created_run.notification_sent,
+      created_run.created_at,
+      created_run.batches_processed
   `;
 
   if (!row) {

@@ -5,6 +5,7 @@ import {
   createEvaluationRun,
   getEvaluationRun,
   loadNextEvaluationBatch,
+  loadPendingEvaluationRunIds,
   markEvaluationRunNotificationSent,
   recordEvaluationBatchProcessed,
   recordEvaluationCandidateOutcome,
@@ -34,6 +35,44 @@ function queryText(strings: TemplateStringsArray) {
   return strings.join("$parameter");
 }
 
+/**
+ * Simulates PostgreSQL's data-modifying-CTE snapshot rule: a statement that
+ * re-reads evaluation_runs/evaluation_run_candidates as base tables (outside
+ * their own INSERT clauses) cannot see rows written earlier in the same
+ * statement, so real Postgres returns no row there. A query that only reads
+ * the INSERT CTEs' own RETURNING output (via their CTE names) does see them.
+ */
+function simulateEvaluationRunCreationSql(): EvaluationRunSql {
+  return async (strings, ...values) => {
+    const query = queryText(strings);
+    const withoutInserts = query.replace(
+      /INSERT INTO evaluation_run(?:s|_candidates)\s*\([^)]*\)/gi,
+      "",
+    );
+
+    if (/(?:FROM|JOIN)\s+evaluation_run(?:s|_candidates)\b/i.test(withoutInserts)) {
+      return [];
+    }
+
+    const productIds = values.at(-1) as string[];
+
+    return [{
+      id: "7",
+      importRef: values[0],
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+      notificationSent: false,
+      createdAt: "2026-09-16T00:00:00.000Z",
+      candidatesSelected: productIds.length,
+      evaluationsCompleted: 0,
+      evaluationsFailed: 0,
+      pendingCandidates: productIds.length,
+      batchesProcessed: 0,
+    }];
+  };
+}
+
 test("creates a pending run with ordered candidate membership", async () => {
   let query = "";
   let values: unknown[] = [];
@@ -58,6 +97,31 @@ test("creates a pending run with ordered candidate membership", async () => {
     "[]",
     ["42", "9"],
   ]);
+});
+
+test("creates a run from the INSERT CTEs' own RETURNING output, guarding against a base-table re-read", async () => {
+  let query = "";
+  const sql: EvaluationRunSql = async (strings, ...values) => {
+    query = queryText(strings);
+    return simulateEvaluationRunCreationSql()(strings, ...values);
+  };
+
+  const run = await createEvaluationRun(sql, {
+    importRef: "abc123",
+    candidateProductIds: ["42", "9", "17"],
+  });
+
+  assert.equal(run.id, "7");
+  assert.equal(run.status, "pending");
+  assert.equal(run.candidatesSelected, 3);
+  assert.equal(run.pendingCandidates, 3);
+  assert.equal(run.evaluationsCompleted, 0);
+  assert.equal(run.evaluationsFailed, 0);
+  assert.match(query, /FROM created_run/);
+  assert.doesNotMatch(
+    query.replace(/INSERT INTO evaluation_run(?:s|_candidates)\s*\([^)]*\)/gi, ""),
+    /(?:FROM|JOIN)\s+evaluation_run(?:s|_candidates)\b/i,
+  );
 });
 
 test("launch claiming is exclusive, releases failed starts, and marks only its owner", async () => {
@@ -87,6 +151,20 @@ test("launch claiming is exclusive, releases failed starts, and marks only its o
   assert.equal(await claimEvaluationRunLaunch(sql, "7"), "owner-a");
   assert.equal(await markEvaluationRunLaunched(sql, "7", "stale"), false);
   assert.equal(await markEvaluationRunLaunched(sql, "7", "owner-a"), true);
+});
+
+test("finds orphaned runs for launch recovery by pending status and launch_status only", async () => {
+  let query = "";
+  const sql: EvaluationRunSql = async (strings) => {
+    query = queryText(strings);
+    return [{ id: "1" }, { id: "2" }, { id: "not-a-run-id" }, { id: 3 }];
+  };
+
+  const pendingRunIds = await loadPendingEvaluationRunIds(sql);
+
+  assert.deepEqual(pendingRunIds, ["1", "2"]);
+  assert.match(query, /status = 'pending'/);
+  assert.match(query, /launch_status = 'pending'/);
 });
 
 test("rejects missing, duplicate, and non-product candidate membership", async () => {
