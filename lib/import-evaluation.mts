@@ -21,7 +21,10 @@ export type ImportEvaluationResult = {
   discountPercent: string | null;
   source?: string;
   brand?: string | null;
+  listingText?: string | null;
   articleCondition?: string | null;
+  sizeGuess?: string | null;
+  translatedListingTextDa?: string | null;
 };
 
 export type EvaluationCandidate = Pick<

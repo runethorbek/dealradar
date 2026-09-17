@@ -42,6 +42,11 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
   `;
   const recommendations = await sql`
     SELECT p.id::TEXT AS "productId", p.external_url AS "externalUrl", p.title,
+      p.source, p.brand,
+      p.raw_data ->> 'listing_text' AS "listingText",
+      p.raw_data ->> 'article_condition' AS "articleCondition",
+      p.raw_data ->> 'size_guess' AS "sizeGuess",
+      pe.translated_listing_text_da AS "translatedListingTextDa",
       p.current_price::TEXT AS "currentPrice", p.currency,
       p.source_current_price::TEXT AS "sourceCurrentPrice", p.source_currency AS "sourceCurrency",
       p.hidden, pe.preference_score AS "preferenceScore", pe.deal_score AS "dealScore"

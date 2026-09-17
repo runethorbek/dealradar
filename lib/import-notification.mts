@@ -1,7 +1,15 @@
+import { getProductDisplayTitle } from "./vinted-display-title.mts";
+
 export type ImportRecommendation = {
   productId: string;
   externalUrl: string;
   title: string;
+  source?: string;
+  brand?: string | null;
+  listingText?: string | null;
+  articleCondition?: string | null;
+  sizeGuess?: string | null;
+  translatedListingTextDa?: string | null;
   currentPrice: string | null;
   currency: string | null;
   sourceCurrentPrice: string | null;
@@ -177,6 +185,18 @@ export function parsePartialScanWarning(
   };
 }
 
+function getRecommendationDisplayTitle(recommendation: ImportSlackHighlight) {
+  return getProductDisplayTitle({
+    source: recommendation.source ?? "",
+    title: recommendation.title,
+    brand: recommendation.brand ?? null,
+    listingText: recommendation.listingText ?? null,
+    articleCondition: recommendation.articleCondition ?? null,
+    sizeGuess: recommendation.sizeGuess ?? null,
+    evaluation: { translatedListingTextDa: recommendation.translatedListingTextDa ?? null },
+  });
+}
+
 function getDisplayPrice(recommendation: ImportSlackHighlight) {
   if (recommendation.currentPrice !== null && recommendation.currency !== null) {
     return {
@@ -258,7 +278,7 @@ export function formatImportSlackMessage(
 
     message +=
       `\n\nTop recommendation:\n` +
-      `${escapeSlackText(recommendation.title)}\n` +
+      `${escapeSlackText(getRecommendationDisplayTitle(recommendation))}\n` +
       scores +
       price +
       `<${escapeSlackText(recommendation.externalUrl)}|View product>`;

@@ -488,7 +488,9 @@ export async function POST(request: Request) {
         upserted.source_currency AS "sourceCurrency",
         upserted.hidden,
         upserted.brand,
+        upserted.raw_data ->> 'listing_text' AS "listingText",
         upserted.raw_data ->> 'article_condition' AS "articleCondition",
+        upserted.raw_data ->> 'size_guess' AS "sizeGuess",
         (existing.id IS NULL) AS inserted,
         snapshot.id::TEXT AS "snapshotId",
         (
@@ -603,7 +605,8 @@ export async function POST(request: Request) {
             p.watched,
             pf.rating AS feedback,
             pe.preference_score AS "preferenceScore",
-            pe.deal_score AS "dealScore"
+            pe.deal_score AS "dealScore",
+            pe.translated_listing_text_da AS "translatedListingTextDa"
           FROM products p
           LEFT JOIN product_feedback pf ON pf.product_id = p.id
           LEFT JOIN product_evaluations pe ON pe.product_id = p.id
@@ -622,6 +625,10 @@ export async function POST(request: Request) {
           preferenceScore:
             typeof row.preferenceScore === "number" ? row.preferenceScore : null,
           dealScore: typeof row.dealScore === "number" ? row.dealScore : null,
+          translatedListingTextDa:
+            typeof row.translatedListingTextDa === "string"
+              ? row.translatedListingTextDa
+              : null,
         },
       ]),
     );

@@ -128,6 +128,29 @@ test("new products use the unrounded 60/40 score, including the exact 7.0 bounda
   );
 });
 
+test("carries Vinted display-title fields through the selected highlight without affecting selection", () => {
+  const highlight = selectSlackHighlight([
+    candidate("vinted", {
+      watched: true,
+      priceDropPercent: "5",
+      source: "vinted.com",
+      brand: "Racing Green",
+      listingText: "granatowa marynarka z metką",
+      articleCondition: "Ny med prismærker",
+      sizeGuess: "S",
+      translatedListingTextDa: "marineblå blazer med mærke",
+    }),
+  ]);
+
+  assert.equal(highlight?.productId, "vinted");
+  assert.equal(highlight?.source, "vinted.com");
+  assert.equal(highlight?.brand, "Racing Green");
+  assert.equal(highlight?.listingText, "granatowa marynarka z metką");
+  assert.equal(highlight?.articleCondition, "Ny med prismærker");
+  assert.equal(highlight?.sizeGuess, "S");
+  assert.equal(highlight?.translatedListingTextDa, "marineblå blazer med mærke");
+});
+
 test("hidden products, price increases, and missing valid price drops never qualify", () => {
   assert.equal(
     selectSlackHighlight([

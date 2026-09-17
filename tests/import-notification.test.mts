@@ -464,6 +464,110 @@ test("formats preserved source pricing when normalized pricing is unavailable", 
   );
 });
 
+test("uses the translated Vinted display title in the Slack recommendation", () => {
+  const recommendation: ImportRecommendation = {
+    productId: "6",
+    externalUrl: "https://vinted.dk/items/vinted-deal",
+    title: "Bleizeri, Varemærke: Racing Green, Artiklens stand: Ny med prismærker, Størrelse: S, 17.43 kr",
+    source: "vinted.com",
+    brand: "Racing Green",
+    listingText: "granatowa marynarka z metką",
+    articleCondition: "Ny med prismærker",
+    sizeGuess: "S",
+    translatedListingTextDa: "marineblå blazer med mærke",
+    currentPrice: "120.00",
+    currency: "DKK",
+    sourceCurrentPrice: null,
+    sourceCurrency: null,
+    hidden: false,
+    preferenceScore: 8,
+    dealScore: 7,
+  };
+
+  assert.match(
+    formatImportSlackMessage(summary, recommendation),
+    /Top recommendation:\nRacing Green - marineblå blazer med mærke - Ny med prismærker - S\n/,
+  );
+});
+
+test("falls back to the original listing text when no translation is stored", () => {
+  const recommendation: ImportRecommendation = {
+    productId: "7",
+    externalUrl: "https://vinted.dk/items/vinted-deal-2",
+    title: "Raw Vinted title",
+    source: "vinted.com",
+    brand: "Racing Green",
+    listingText: "granatowa marynarka z metką",
+    articleCondition: "Ny med prismærker",
+    sizeGuess: "S",
+    translatedListingTextDa: null,
+    currentPrice: "120.00",
+    currency: "DKK",
+    sourceCurrentPrice: null,
+    sourceCurrency: null,
+    hidden: false,
+    preferenceScore: 8,
+    dealScore: 7,
+  };
+
+  assert.match(
+    formatImportSlackMessage(summary, recommendation),
+    /Top recommendation:\nRacing Green - granatowa marynarka z metką - Ny med prismærker - S\n/,
+  );
+});
+
+test("collapses missing Vinted title segments cleanly in Slack and never shows price text", () => {
+  const recommendation: ImportRecommendation = {
+    productId: "8",
+    externalUrl: "https://vinted.dk/items/vinted-deal-3",
+    title: "Raw Vinted title",
+    source: "vinted.com",
+    brand: null,
+    listingText: "granatowa marynarka z metką",
+    articleCondition: null,
+    sizeGuess: null,
+    translatedListingTextDa: null,
+    currentPrice: "120.00",
+    currency: "DKK",
+    sourceCurrentPrice: null,
+    sourceCurrency: null,
+    hidden: false,
+    preferenceScore: 8,
+    dealScore: 7,
+  };
+
+  const message = formatImportSlackMessage(summary, recommendation);
+
+  assert.match(message, /Top recommendation:\ngranatowa marynarka z metką\n/);
+  assert.doesNotMatch(message.split("\n\n")[1].split("\n")[1], /\bkr\b|\d+[.,]\d+/);
+});
+
+test("keeps Zalando Slack titles unchanged even when other display-title fields are present", () => {
+  const recommendation: ImportRecommendation = {
+    productId: "9",
+    externalUrl: "https://zalando.dk/items/zalando-deal",
+    title: "Zalando raw title",
+    source: "zalando.dk",
+    brand: "Mango",
+    listingText: "should be ignored",
+    articleCondition: "should be ignored",
+    sizeGuess: "should be ignored",
+    translatedListingTextDa: "should be ignored",
+    currentPrice: "120.00",
+    currency: "DKK",
+    sourceCurrentPrice: null,
+    sourceCurrency: null,
+    hidden: false,
+    preferenceScore: 8,
+    dealScore: 7,
+  };
+
+  assert.match(
+    formatImportSlackMessage(summary, recommendation),
+    /Top recommendation:\nZalando raw title\n/,
+  );
+});
+
 test("does not warn when scan_status is absent", () => {
   assert.equal(parsePartialScanWarning("Scarosso", { products: [] }), null);
 });
