@@ -154,6 +154,24 @@ test("a case-insensitive preferred brand match that is unavailable in the datase
   assert.deepEqual(brandOptionValues(container), ["", "Mango"]);
 });
 
+test("with no preferred brands available in the current scope, the full brand list is shown instead of an empty dropdown", async () => {
+  const emptyPreferred = await renderFilterBar({
+    ...filterBarProps,
+    brand: null,
+    brands: ["Mango", "Acne Studios"],
+    preferredBrands: [],
+  });
+  assert.deepEqual(brandOptionValues(emptyPreferred), ["", "Mango", "Acne Studios"]);
+
+  const nonMatchingPreferred = await renderFilterBar({
+    ...filterBarProps,
+    brand: null,
+    brands: ["Mango", "Acne Studios"],
+    preferredBrands: ["Burberry"],
+  });
+  assert.deepEqual(brandOptionValues(nonMatchingPreferred), ["", "Mango", "Acne Studios"]);
+});
+
 test("brand search matches case-insensitively and partially across all available brands, not only preferred ones", async () => {
   const container = await renderFilterBar({
     ...filterBarProps,

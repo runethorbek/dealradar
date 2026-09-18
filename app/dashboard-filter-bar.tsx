@@ -59,10 +59,14 @@ export function DashboardFilterBar({
   }
 
   const trimmedBrandQuery = brandQuery.trim().toLocaleLowerCase();
+  const availablePreferredBrands = [...new Set(preferredBrands.map(
+    (preferred) => brands.find((option) => option.toLocaleLowerCase() === preferred.toLocaleLowerCase()),
+  ))].filter((option): option is string => option !== undefined);
   const matchedBrands = trimmedBrandQuery
     ? brands.filter((option) => option.toLocaleLowerCase().includes(trimmedBrandQuery))
-    : [...new Set(preferredBrands.map((preferred) => brands.find((option) => option.toLocaleLowerCase() === preferred.toLocaleLowerCase())))]
-      .filter((option): option is string => option !== undefined);
+    : availablePreferredBrands.length > 0
+      ? availablePreferredBrands
+      : brands;
   const brandOptions = brand && brands.includes(brand) && !matchedBrands.includes(brand)
     ? [brand, ...matchedBrands]
     : matchedBrands;
