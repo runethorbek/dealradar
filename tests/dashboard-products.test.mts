@@ -53,9 +53,9 @@ test("parseDashboardSource defaults unsupported sources to All", () => {
   assert.equal(parseDashboardSource("unsupported.example"), null);
 });
 
-test("dashboard brands are accepted only for Zalando", () => {
+test("dashboard brands are accepted for any selected source, but not when no source is selected", () => {
   assert.equal(parseDashboardBrand("Mango", "zalando.dk"), "Mango");
-  assert.equal(parseDashboardBrand("Mango", "vinted.com"), null);
+  assert.equal(parseDashboardBrand("Mango", "vinted.com"), "Mango");
   assert.equal(parseDashboardBrand("Mango", null), null);
   assert.equal(parseDashboardBrand("", "zalando.dk"), null);
   assert.equal(parseDashboardBrand(["Mango"], "zalando.dk"), null);

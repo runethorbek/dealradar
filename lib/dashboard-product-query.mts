@@ -36,15 +36,16 @@ export type DashboardSql = (
   ...values: unknown[]
 ) => Promise<unknown[]>;
 
-export async function getCurrentZalandoBrands(
+export async function getCurrentDashboardBrands(
   sql: DashboardSql,
+  source: string,
   freshness: DashboardFreshness,
 ) {
   const freshnessHours = dashboardFreshnessHours(freshness);
   const rows = await sql`
     SELECT DISTINCT p.brand AS brand
     FROM products p
-    WHERE p.source = 'zalando.dk'
+    WHERE p.source = ${source}
       AND p.brand IS NOT NULL
       AND TRIM(p.brand) <> ''
       AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
@@ -91,7 +92,7 @@ export async function getLatestDashboardProducts(
   monitor: string | null = null,
 ) {
   const freshnessHours = dashboardFreshnessHours(freshness);
-  const selectedBrand = source === "zalando.dk" ? brand : null;
+  const selectedBrand = source ? brand : null;
   const rows = source
     ? await sql`
         SELECT

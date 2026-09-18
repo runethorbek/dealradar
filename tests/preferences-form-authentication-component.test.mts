@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, beforeEach, test } from "node:test";
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 
@@ -14,6 +13,13 @@ Object.defineProperties(globalThis, {
   Node: { configurable: true, value: dom.window.Node },
   IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
 });
+
+// react-dom memoizes DOM feature detection (e.g. canUseDOM) at import time, which
+// gates the modern text-input change-event path. Importing it dynamically, after
+// the JSDOM globals above are installed, keeps that detection accurate so a plain
+// "input" event reliably triggers onChange in the preferred-brand test below.
+const { act, createElement } = await import("react");
+const { createRoot } = await import("react-dom/client");
 
 const { PreferencesForm } = await import("../app/preferences/preferences-form.tsx");
 const originalFetch = globalThis.fetch;
@@ -135,4 +141,52 @@ test("Settings shows the default automatic Gemini evaluation limit as an integer
   assert.equal(batchInput.value, "5");
   assert.equal(batchInput.min, "1");
   assert.equal(batchInput.max, "10");
+});
+
+test("Preferred brands can be added and removed, and are included when settings are saved", async () => {
+  const container = await renderPreferencesForm(Response.json({ success: true }));
+
+  const input = container.querySelector<HTMLInputElement>("#preferred-brand");
+  assert.ok(input);
+
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+
+  await act(async () => {
+    nativeInputValueSetter.call(input, "Tiger of Sweden");
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+
+  const addButton = [...container.querySelectorAll("button")].find(
+    (button) => button.type === "button" && button.textContent === "Add brand" && button.previousElementSibling === input,
+  );
+  assert.ok(addButton, "Expected an Add brand button next to the preferred-brand input.");
+
+  await act(async () => {
+    addButton.click();
+  });
+
+  assert.match(container.textContent ?? "", /Tiger of Sweden ×/);
+
+  let savedBody: unknown;
+  globalThis.fetch = async (_url, init) => {
+    savedBody = init && typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+    return Response.json({ success: true });
+  };
+
+  const saveButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save settings",
+  );
+  assert.ok(saveButton);
+
+  await act(async () => {
+    saveButton.click();
+  });
+
+  assert.deepEqual(
+    (savedBody as { brandFilter?: { preferredBrands: string[] } } | undefined)?.brandFilter,
+    { preferredBrands: ["Tiger of Sweden"] },
+  );
 });

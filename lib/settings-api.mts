@@ -1,11 +1,12 @@
 import type { OwnerAuthorization } from "./owner-authorization.mts";
 import { parseGeminiSettings, type GeminiSettings } from "./gemini-settings.mts";
 import { parseVintedSettings, type VintedSettings } from "./vinted-settings.mts";
+import { parseBrandFilterSettings, type BrandFilterSettings } from "./brand-filter-settings.mts";
 
-type SavedSettings = { vinted: VintedSettings; gemini?: GeminiSettings; updatedAt: string };
+type SavedSettings = { vinted: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings; updatedAt: string };
 type SettingsHandlerDependencies = {
   authorize: () => Promise<OwnerAuthorization>;
-  save: (vinted: VintedSettings, gemini?: GeminiSettings) => Promise<SavedSettings>;
+  save: (vinted: VintedSettings, gemini?: GeminiSettings, brandFilter?: BrandFilterSettings) => Promise<SavedSettings>;
 };
 
 export async function handleSettingsPost(request: Request, dependencies: SettingsHandlerDependencies) {
@@ -27,8 +28,16 @@ export async function handleSettingsPost(request: Request, dependencies: Setting
     gemini = parsedGemini;
   }
 
+  const brandFilterValue = (body as Record<string, unknown>).brandFilter;
+  let brandFilter: BrandFilterSettings | undefined;
+  if (brandFilterValue !== undefined) {
+    const parsedBrandFilter = parseBrandFilterSettings(brandFilterValue);
+    if (!parsedBrandFilter) return Response.json({ success: false, error: "Invalid brand filter settings." }, { status: 400 });
+    brandFilter = parsedBrandFilter;
+  }
+
   try {
-    return Response.json({ success: true, ...(await dependencies.save(vinted, gemini)) });
+    return Response.json({ success: true, ...(await dependencies.save(vinted, gemini, brandFilter)) });
   } catch {
     return Response.json({ success: false, error: "Settings could not be saved." }, { status: 500 });
   }

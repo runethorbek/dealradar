@@ -13,7 +13,7 @@ import {
 } from "@/lib/dashboard-source.mts";
 import {
   getLatestDashboardProducts,
-  getCurrentZalandoBrands,
+  getCurrentDashboardBrands,
   getCurrentDashboardMonitors,
   type DashboardSort,
   type DashboardSql,
@@ -23,6 +23,7 @@ import {
   type DashboardFreshness,
 } from "@/lib/dashboard-freshness.mts";
 import { parseDashboardBrand } from "@/lib/dashboard-brand.mts";
+import { defaultBrandFilterSettings, parseBrandFilterSettings } from "@/lib/brand-filter-settings.mts";
 import { parseDashboardMonitor } from "@/lib/dashboard-monitor.mts";
 import { getDashboardHref } from "@/lib/dashboard-href.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
@@ -52,12 +53,13 @@ async function getLatestProducts(
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], monitors: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], failed: true };
   }
 
   try {
     const sql = neon(databaseUrl);
     const dashboardSql = sql as DashboardSql;
+    const [settings] = await sql`SELECT brand_filter AS "brandFilter" FROM application_settings WHERE id = 1`;
     return {
       products: await getLatestDashboardProducts(
         dashboardSql,
@@ -69,14 +71,15 @@ async function getLatestProducts(
         brand,
         monitor,
       ),
-      brands: source === "zalando.dk"
-        ? await getCurrentZalandoBrands(dashboardSql, freshness)
+      brands: source
+        ? await getCurrentDashboardBrands(dashboardSql, source, freshness)
         : [],
+      preferredBrands: (parseBrandFilterSettings(settings?.brandFilter) ?? defaultBrandFilterSettings).preferredBrands,
       monitors: await getCurrentDashboardMonitors(dashboardSql, source, freshness),
       failed: false,
     };
   } catch {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], monitors: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], failed: true };
   }
 }
 
@@ -96,7 +99,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   )
     ? (requestedSort as Sort)
     : "best_match";
-  const { products, brands, monitors, failed } = await getLatestProducts(
+  const { products, brands, preferredBrands, monitors, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
     selectedView,
@@ -145,6 +148,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           brand={selectedBrand}
           monitor={selectedMonitor}
           brands={brands}
+          preferredBrands={preferredBrands}
           monitors={monitors}
         />
 

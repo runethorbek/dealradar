@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   dashboardSourceFilters,
@@ -33,6 +34,7 @@ type DashboardFilterBarProps = {
   brand: string | null;
   monitor: string | null;
   brands: string[];
+  preferredBrands: string[];
   monitors: string[];
 };
 
@@ -44,9 +46,26 @@ export function DashboardFilterBar({
   brand,
   monitor,
   brands,
+  preferredBrands,
   monitors,
 }: DashboardFilterBarProps) {
   const router = useRouter();
+  const [brandQuery, setBrandQuery] = useState("");
+  const [brandQuerySource, setBrandQuerySource] = useState(source);
+
+  if (source !== brandQuerySource) {
+    setBrandQuerySource(source);
+    setBrandQuery("");
+  }
+
+  const trimmedBrandQuery = brandQuery.trim().toLocaleLowerCase();
+  const matchedBrands = trimmedBrandQuery
+    ? brands.filter((option) => option.toLocaleLowerCase().includes(trimmedBrandQuery))
+    : [...new Set(preferredBrands.map((preferred) => brands.find((option) => option.toLocaleLowerCase() === preferred.toLocaleLowerCase())))]
+      .filter((option): option is string => option !== undefined);
+  const brandOptions = brand && brands.includes(brand) && !matchedBrands.includes(brand)
+    ? [brand, ...matchedBrands]
+    : matchedBrands;
 
   function navigate(
     nextSource: DashboardSource | null = source,
@@ -104,9 +123,17 @@ export function DashboardFilterBar({
         </select>
       </label>
 
-      {source === "zalando.dk" ? (
+      {source ? (
         <label className="flex min-w-28 flex-col gap-1 text-xs font-medium uppercase tracking-wide text-zinc-400">
           Brand
+          <input
+            type="text"
+            aria-label="Search brands"
+            value={brandQuery}
+            onChange={(event) => setBrandQuery(event.target.value)}
+            placeholder="Search brands"
+            className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-zinc-600"
+          />
           <select
             aria-label="Filter deals by brand"
             value={brand ?? ""}
@@ -114,7 +141,7 @@ export function DashboardFilterBar({
             className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-zinc-600"
           >
             <option value="">All brands</option>
-            {brands.map((option) => <option key={option} value={option}>{option}</option>)}
+            {brandOptions.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
       ) : null}

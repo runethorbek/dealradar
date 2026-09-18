@@ -4,7 +4,7 @@ export function parseDashboardBrand(
   value: unknown,
   source: DashboardSource | null,
 ) {
-  return source === "zalando.dk" && typeof value === "string" && value
+  return source !== null && typeof value === "string" && value
     ? value
     : null;
 }

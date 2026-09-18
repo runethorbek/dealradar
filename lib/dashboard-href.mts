@@ -30,7 +30,7 @@ export function getDashboardHref(
     params.set("freshness", freshness);
   }
 
-  if (source === "zalando.dk" && brand) {
+  if (source && brand) {
     params.set("brand", brand);
   }
 

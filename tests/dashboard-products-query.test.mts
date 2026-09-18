@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  getCurrentZalandoBrands,
+  getCurrentDashboardBrands,
   getCurrentDashboardMonitors,
   getLatestDashboardProducts,
   snapshotSummaryFields,
@@ -58,9 +58,12 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
     const freshnessHours = values.find(
       (value): value is number => value === 24 || value === 168,
     )!;
+    const source = values.find(
+      (value): value is string => typeof value === "string" && value.includes("."),
+    );
     return [...new Set(
       listProducts
-        .filter((product) => product.source === "zalando.dk")
+        .filter((product) => product.source === source)
         .filter((product) => isFresh(product, freshnessHours))
         .map((product) => product.brand)
         .filter((brand): brand is string => Boolean(brand?.trim())),
@@ -279,7 +282,7 @@ test("dashboard freshness windows include only products inside their rolling SQL
   assertFreshnessQuery(queryCalls[1]!.query, queryCalls[1]!.values, 168);
 });
 
-test("current Zalando brands are distinct, alphabetical, non-empty, and fresh", async () => {
+test("current dashboard brands are distinct, alphabetical, non-empty, fresh, and scoped to the selected source", async () => {
   reset();
   listProducts = [
     { id: "mango", lastSeenAt: cutoff.toISOString(), source: "zalando.dk", brand: "Mango" },
@@ -291,9 +294,10 @@ test("current Zalando brands are distinct, alphabetical, non-empty, and fresh", 
     { id: "stale", lastSeenAt: new Date(cutoff.getTime() - 1).toISOString(), source: "zalando.dk", brand: "Stale Brand" },
   ];
 
-  assert.deepEqual(await getCurrentZalandoBrands(sql, "24h"), ["Acne Studios", "Mango"]);
+  assert.deepEqual(await getCurrentDashboardBrands(sql, "zalando.dk", "24h"), ["Acne Studios", "Mango"]);
+  assert.deepEqual(await getCurrentDashboardBrands(sql, "vinted.com", "24h"), ["Vinted Brand"]);
   assertFreshnessQuery(queryCalls[0]!.query, queryCalls[0]!.values, 24);
-  assert.match(queryCalls[0]!.query, /p\.source = 'zalando\.dk'/);
+  assert.ok(queryCalls[0]!.values.includes("zalando.dk"));
 });
 
 test("current dashboard monitors use fresh, source-aware JSONB arrays only", async () => {
@@ -378,15 +382,30 @@ test("an invalid brand returns no products without affecting unfiltered behavior
   assert.deepEqual(invalidBrand, []);
 });
 
-test("a brand supplied with Vinted is ignored", async () => {
+test("a brand filter applies to Vinted products just like Zalando", async () => {
   reset();
-  listProducts = [{ id: "vinted", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Any Brand" }];
+  listProducts = [
+    { id: "matching", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Mango" },
+    { id: "different-brand", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Any Brand" },
+  ];
 
   const result = await getLatestDashboardProducts(
     sql, "vinted.com", "best_match", "visible", "24h", null, "Mango",
   );
 
-  assert.deepEqual(result.map((product) => product.id), ["vinted"]);
+  assert.deepEqual(result.map((product) => product.id), ["matching"]);
+  assert.ok(queryCalls[0]!.values.includes("Mango"));
+});
+
+test("a brand filter is ignored when no source is selected", async () => {
+  reset();
+  listProducts = [{ id: "any-source", lastSeenAt: cutoff.toISOString(), source: "vinted.com", brand: "Any Brand" }];
+
+  const result = await getLatestDashboardProducts(
+    sql, null, "best_match", "visible", "24h", null, "Mango",
+  );
+
+  assert.deepEqual(result.map((product) => product.id), ["any-source"]);
   assert.ok(!queryCalls[0]!.values.includes("Mango"));
 });
 

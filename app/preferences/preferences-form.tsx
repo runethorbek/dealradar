@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { vintedArticleConditions, type VintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, maximumAutomaticEvaluationLimit, maximumWorkflowBatchSize, minimumWorkflowBatchSize, type GeminiSettings } from "@/lib/gemini-settings.mts";
+import { defaultBrandFilterSettings, type BrandFilterSettings } from "@/lib/brand-filter-settings.mts";
 
 type SaveState =
   | "idle"
@@ -14,13 +15,15 @@ type SaveState =
 
 const preferencesCallbackPath = "/preferences";
 
-export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] }, gemini = defaultGeminiSettings }: { profileText: string; vinted?: VintedSettings; gemini?: GeminiSettings }) {
+export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] }, gemini = defaultGeminiSettings, brandFilter = defaultBrandFilterSettings }: { profileText: string; vinted?: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings }) {
   const [value, setValue] = useState(profileText);
   const [minimumCondition, setMinimumCondition] = useState(vinted.minimumCondition ?? "");
   const [excludedBrands, setExcludedBrands] = useState(vinted.excludedBrands);
   const [automaticEvaluationLimit, setAutomaticEvaluationLimit] = useState(gemini.automaticEvaluationLimit);
   const [workflowBatchSize, setWorkflowBatchSize] = useState(gemini.workflowBatchSize);
+  const [preferredBrands, setPreferredBrands] = useState(brandFilter.preferredBrands);
   const [brandInput, setBrandInput] = useState("");
+  const [preferredBrandInput, setPreferredBrandInput] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
   async function savePreferences(event: FormEvent<HTMLFormElement>) {
@@ -60,7 +63,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit, workflowBatchSize } }),
+        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit, workflowBatchSize }, brandFilter: { preferredBrands } }),
       });
       if (response.status === 401) return setSaveState("signInRequired");
       if (response.status === 403) return setSaveState("unauthorized");
@@ -128,6 +131,14 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
         <input id="automatic-evaluation-limit" type="number" min="1" max={maximumAutomaticEvaluationLimit} step="1" value={automaticEvaluationLimit} onChange={(event) => { setAutomaticEvaluationLimit(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
         <label htmlFor="workflow-batch-size" className="mt-5 block text-sm font-medium text-zinc-700">Workflow evaluations per batch</label>
         <input id="workflow-batch-size" type="number" min={minimumWorkflowBatchSize} max={maximumWorkflowBatchSize} step="1" value={workflowBatchSize} onChange={(event) => { setWorkflowBatchSize(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
+      </div>
+
+      <div className="mt-10 border-t border-zinc-200 pt-8">
+        <h2 className="text-sm font-medium text-zinc-700">Brand filter</h2>
+        <p className="mt-1 text-sm leading-6 text-zinc-500">Brands shown prominently in the dashboard brand filter, when available in the current results.</p>
+        <label htmlFor="preferred-brand" className="mt-5 block text-sm font-medium text-zinc-700">Preferred brands</label>
+        <div className="mt-2 flex flex-wrap gap-2">{preferredBrands.map((brand) => <button key={brand} type="button" onClick={() => { setPreferredBrands((brands) => brands.filter((item) => item !== brand)); setSaveState("idle"); }} className="rounded-full bg-zinc-100 px-3 py-1 text-sm">{brand} ×</button>)}</div>
+        <div className="mt-2 flex gap-2"><input id="preferred-brand" value={preferredBrandInput} onChange={(event) => setPreferredBrandInput(event.target.value)} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="Add brand" /><button type="button" onClick={() => { const brand = preferredBrandInput.trim(); if (brand && !preferredBrands.some((item) => item.toLocaleLowerCase() === brand.toLocaleLowerCase())) setPreferredBrands((brands) => [...brands, brand]); setPreferredBrandInput(""); setSaveState("idle"); }} className="rounded-lg border border-zinc-300 px-3 py-2 text-sm">Add brand</button></div>
       </div>
 
       <div className="mt-10 border-t border-zinc-200 pt-8">
