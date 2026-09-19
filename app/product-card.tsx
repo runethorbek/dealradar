@@ -11,6 +11,7 @@ import type {
 } from "@/lib/dashboard-product.mts";
 import { getPriceHistorySummary } from "@/lib/price-history-summary.mts";
 import { getProductDisplayTitle } from "@/lib/vinted-display-title.mts";
+import { defaultRankingSettings, getOverallScore as computeOverallScore } from "@/lib/ranking-settings.mts";
 
 export type { ProductCardProduct, ProductEvaluation, Rating };
 
@@ -113,18 +114,20 @@ function getPriceHistoryLabel(product: ProductCardProduct) {
   return `${countText} • ${lowestText}`;
 }
 
-function getOverallScore(evaluation: ProductEvaluation) {
+function getOverallScore(evaluation: ProductEvaluation, preferenceWeightPercent: number) {
   return Math.round(
-    evaluation.preferenceScore * 0.6 + evaluation.dealScore * 0.4,
+    computeOverallScore(evaluation.preferenceScore, evaluation.dealScore, preferenceWeightPercent),
   );
 }
 
 export function ProductCard({
   product,
   authCallbackPath,
+  preferenceWeightPercent = defaultRankingSettings.preferenceWeightPercent,
 }: {
   product: ProductCardProduct;
   authCallbackPath: string;
+  preferenceWeightPercent?: number;
 }) {
   const router = useRouter();
   const visibilityAction = product.hidden ? "Unhide" : "Hide";
@@ -402,7 +405,7 @@ export function ProductCard({
           <div>
             <div className="flex flex-wrap gap-2">
               <span className="rounded-full bg-zinc-950 px-2.5 py-1 text-xs font-medium text-white">
-                Overall {getOverallScore(evaluation)}/10
+                Overall {getOverallScore(evaluation, preferenceWeightPercent)}/10
               </span>
               <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700">
                 Preference {evaluation.preferenceScore}/10

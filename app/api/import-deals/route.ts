@@ -5,6 +5,7 @@ import {
 } from "@/lib/import-evaluation.mts";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
+import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-settings.mts";
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
@@ -552,10 +553,11 @@ export async function POST(request: Request) {
       (result) => result.inserted,
     ).length;
     const [storedSettings] = await sql`
-      SELECT vinted, gemini FROM application_settings WHERE id = 1
+      SELECT vinted, gemini, ranking FROM application_settings WHERE id = 1
     `;
     const vintedSettings = parseVintedSettings(storedSettings?.vinted) ?? defaultVintedSettings;
     const geminiSettings = parseGeminiSettings(storedSettings?.gemini) ?? defaultGeminiSettings;
+    const preferenceWeightPercent = (parseRankingSettings(storedSettings?.ranking) ?? defaultRankingSettings).preferenceWeightPercent;
     const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings, geminiSettings.automaticEvaluationLimit);
     const evaluationCandidates = preselection.candidates;
     const productsUpdated = products.length - productsInserted;
@@ -638,6 +640,7 @@ export async function POST(request: Request) {
 
         return state ? [{ ...result, ...state }] : [];
       }),
+      preferenceWeightPercent,
     ) : null;
     // There is no durable work to finalize when nothing was selected, so retain
     // one useful import notification without creating a stranded empty run.

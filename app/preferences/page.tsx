@@ -7,6 +7,7 @@ import { AppNavigation } from "../navigation";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
 import { defaultBrandFilterSettings, parseBrandFilterSettings } from "@/lib/brand-filter-settings.mts";
+import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-settings.mts";
 
 async function getPreferences() {
   await connection();
@@ -14,13 +15,13 @@ async function getPreferences() {
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, brandFilter: defaultBrandFilterSettings, failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, brandFilter: defaultBrandFilterSettings, ranking: defaultRankingSettings, failed: true };
   }
 
   try {
     const sql = neon(databaseUrl);
     const [preference] = await sql`
-      SELECT p.profile_text AS "profileText", s.vinted, s.gemini, s.brand_filter AS "brandFilter"
+      SELECT p.profile_text AS "profileText", s.vinted, s.gemini, s.brand_filter AS "brandFilter", s.ranking
       FROM preferences p
       LEFT JOIN application_settings s ON s.id = 1
       WHERE p.id = 1
@@ -32,15 +33,16 @@ async function getPreferences() {
       vinted: parseVintedSettings(preference?.vinted) ?? defaultVintedSettings,
       gemini: parseGeminiSettings(preference?.gemini) ?? defaultGeminiSettings,
       brandFilter: parseBrandFilterSettings(preference?.brandFilter) ?? defaultBrandFilterSettings,
+      ranking: parseRankingSettings(preference?.ranking) ?? defaultRankingSettings,
       failed: false,
     };
   } catch {
-    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, brandFilter: defaultBrandFilterSettings, failed: true };
+    return { profileText: "", vinted: defaultVintedSettings, gemini: defaultGeminiSettings, brandFilter: defaultBrandFilterSettings, ranking: defaultRankingSettings, failed: true };
   }
 }
 
 export default async function PreferencesPage() {
-  const [{ profileText, vinted, gemini, brandFilter, failed }, session] = await Promise.all([
+  const [{ profileText, vinted, gemini, brandFilter, ranking, failed }, session] = await Promise.all([
     getPreferences(),
     getServerSession(authOptions),
   ]);
@@ -67,7 +69,7 @@ export default async function PreferencesPage() {
               Preferences could not be loaded right now.
             </p>
           ) : (
-            <PreferencesForm profileText={profileText} vinted={vinted} gemini={gemini} brandFilter={brandFilter} />
+            <PreferencesForm profileText={profileText} vinted={vinted} gemini={gemini} brandFilter={brandFilter} ranking={ranking} />
           )}
         </section>
       </main>

@@ -52,6 +52,16 @@ test("selects the recommendation with the highest rounded overall score", () => 
   assert.equal(selectTopRecommendation(recommendations)?.productId, "2");
 });
 
+test("a configured preference weight can flip which recommendation is selected", () => {
+  const tradeoffRecommendations: ImportRecommendation[] = [
+    { ...recommendations[0], productId: "preference-heavy", preferenceScore: 9, dealScore: 3 },
+    { ...recommendations[0], productId: "deal-heavy", preferenceScore: 3, dealScore: 9 },
+  ];
+
+  assert.equal(selectTopRecommendation(tradeoffRecommendations)?.productId, "preference-heavy");
+  assert.equal(selectTopRecommendation(tradeoffRecommendations, 20)?.productId, "deal-heavy");
+});
+
 test("evaluates hidden and visible products before selecting a visible recommendation", async () => {
   const importedResults: ImportEvaluationResult[] = [
     {

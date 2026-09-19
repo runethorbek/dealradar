@@ -13,6 +13,7 @@ import {
   type ImportSummary,
   type PartialScanWarning,
 } from "./import-notification.mts";
+import { defaultRankingSettings, parseRankingSettings } from "./ranking-settings.mts";
 
 type FinalizationDependencies = {
   sql: EvaluationRunSql;
@@ -59,7 +60,9 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
   importSummary.productsEvaluated = persistedRun.evaluationsCompleted;
   const warnings = Array.isArray(metadata?.scanWarnings) ? metadata.scanWarnings as PartialScanWarning[] : [];
   try {
-    const result = await postSlackMessage(formatImportSlackMessage(importSummary, selectTopRecommendation(recommendations), warnings), claim.clientMessageId);
+    const [rankingSettings] = await sql`SELECT ranking FROM application_settings WHERE id = 1`;
+    const preferenceWeightPercent = parseRankingSettings(rankingSettings?.ranking)?.preferenceWeightPercent ?? defaultRankingSettings.preferenceWeightPercent;
+    const result = await postSlackMessage(formatImportSlackMessage(importSummary, selectTopRecommendation(recommendations, preferenceWeightPercent), warnings), claim.clientMessageId);
     if (!result.success) throw new Error(`Slack delivery failed: ${result.error ?? "unknown_error"}.`);
     if (!await markEvaluationRunNotificationSent(sql, persistedRun.id, claim.claimToken)) throw new Error("Evaluation run notification could not be recorded.");
   } catch {

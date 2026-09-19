@@ -143,6 +143,82 @@ test("Settings shows the default automatic Gemini evaluation limit as an integer
   assert.equal(batchInput.max, "10");
 });
 
+test("Settings shows the default 60% preference weight and includes it when settings are saved", async () => {
+  const container = await renderPreferencesForm(Response.json({ success: true }));
+  const input = container.querySelector<HTMLInputElement>("#preference-weight-percent");
+
+  assert.ok(input);
+  assert.equal(input.type, "number");
+  assert.equal(input.value, "60");
+  assert.equal(input.min, "0");
+  assert.equal(input.max, "100");
+  assert.match(container.textContent ?? "", /Deal weight: 40%/);
+
+  let savedBody: unknown;
+  globalThis.fetch = async (_url, init) => {
+    savedBody = init && typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+    return Response.json({ success: true });
+  };
+
+  const saveButton = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Save settings",
+  );
+  assert.ok(saveButton);
+
+  await act(async () => {
+    saveButton.click();
+  });
+
+  assert.deepEqual(
+    (savedBody as { ranking?: { preferenceWeightPercent: number } } | undefined)?.ranking,
+    { preferenceWeightPercent: 60 },
+  );
+});
+
+test("clearing the preference-weight input keeps the Deal weight display numeric instead of showing NaN", async () => {
+  const container = await renderPreferencesForm(Response.json({ success: true }));
+  const input = container.querySelector<HTMLInputElement>("#preference-weight-percent");
+  assert.ok(input);
+
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+
+  await act(async () => {
+    nativeInputValueSetter.call(input, "");
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+
+  assert.doesNotMatch(container.textContent ?? "", /NaN/);
+  assert.match(container.textContent ?? "", /Deal weight: 40%/);
+});
+
+test("the Deal weight display stays numeric and derives correctly at the 0 and 100 preference-weight boundaries", async () => {
+  const container = await renderPreferencesForm(Response.json({ success: true }));
+  const input = container.querySelector<HTMLInputElement>("#preference-weight-percent");
+  assert.ok(input);
+
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    dom.window.HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+
+  await act(async () => {
+    nativeInputValueSetter.call(input, "0");
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  assert.doesNotMatch(container.textContent ?? "", /NaN/);
+  assert.match(container.textContent ?? "", /Deal weight: 100%/);
+
+  await act(async () => {
+    nativeInputValueSetter.call(input, "100");
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  assert.doesNotMatch(container.textContent ?? "", /NaN/);
+  assert.match(container.textContent ?? "", /Deal weight: 0%/);
+});
+
 test("Preferred brands can be added and removed, and are included when settings are saved", async () => {
   const container = await renderPreferencesForm(Response.json({ success: true }));
 

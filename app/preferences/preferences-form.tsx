@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { vintedArticleConditions, type VintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, maximumAutomaticEvaluationLimit, maximumWorkflowBatchSize, minimumWorkflowBatchSize, type GeminiSettings } from "@/lib/gemini-settings.mts";
 import { defaultBrandFilterSettings, type BrandFilterSettings } from "@/lib/brand-filter-settings.mts";
+import { defaultRankingSettings, getDealWeightPercent, type RankingSettings } from "@/lib/ranking-settings.mts";
 
 type SaveState =
   | "idle"
@@ -15,13 +16,21 @@ type SaveState =
 
 const preferencesCallbackPath = "/preferences";
 
-export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] }, gemini = defaultGeminiSettings, brandFilter = defaultBrandFilterSettings }: { profileText: string; vinted?: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings }) {
+function safeDealWeightPercent(preferenceWeightPercent: number) {
+  const clamped = Number.isFinite(preferenceWeightPercent)
+    ? Math.min(100, Math.max(0, preferenceWeightPercent))
+    : defaultRankingSettings.preferenceWeightPercent;
+  return getDealWeightPercent(clamped);
+}
+
+export function PreferencesForm({ profileText, vinted = { minimumCondition: null, excludedBrands: [] }, gemini = defaultGeminiSettings, brandFilter = defaultBrandFilterSettings, ranking = defaultRankingSettings }: { profileText: string; vinted?: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings; ranking?: RankingSettings }) {
   const [value, setValue] = useState(profileText);
   const [minimumCondition, setMinimumCondition] = useState(vinted.minimumCondition ?? "");
   const [excludedBrands, setExcludedBrands] = useState(vinted.excludedBrands);
   const [automaticEvaluationLimit, setAutomaticEvaluationLimit] = useState(gemini.automaticEvaluationLimit);
   const [workflowBatchSize, setWorkflowBatchSize] = useState(gemini.workflowBatchSize);
   const [preferredBrands, setPreferredBrands] = useState(brandFilter.preferredBrands);
+  const [preferenceWeightPercent, setPreferenceWeightPercent] = useState(ranking.preferenceWeightPercent);
   const [brandInput, setBrandInput] = useState("");
   const [preferredBrandInput, setPreferredBrandInput] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -63,7 +72,7 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit, workflowBatchSize }, brandFilter: { preferredBrands } }),
+        body: JSON.stringify({ vinted: { minimumCondition: minimumCondition || null, excludedBrands }, gemini: { automaticEvaluationLimit, workflowBatchSize }, brandFilter: { preferredBrands }, ranking: { preferenceWeightPercent } }),
       });
       if (response.status === 401) return setSaveState("signInRequired");
       if (response.status === 403) return setSaveState("unauthorized");
@@ -131,6 +140,17 @@ export function PreferencesForm({ profileText, vinted = { minimumCondition: null
         <input id="automatic-evaluation-limit" type="number" min="1" max={maximumAutomaticEvaluationLimit} step="1" value={automaticEvaluationLimit} onChange={(event) => { setAutomaticEvaluationLimit(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
         <label htmlFor="workflow-batch-size" className="mt-5 block text-sm font-medium text-zinc-700">Workflow evaluations per batch</label>
         <input id="workflow-batch-size" type="number" min={minimumWorkflowBatchSize} max={maximumWorkflowBatchSize} step="1" value={workflowBatchSize} onChange={(event) => { setWorkflowBatchSize(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
+      </div>
+
+      <div className="mt-10 border-t border-zinc-200 pt-8">
+        <h2 className="text-sm font-medium text-zinc-700">Ranking</h2>
+        <p className="mt-1 text-sm leading-6 text-zinc-500">
+          Preference is how well a product matches your taste. Deal is how attractive the current price is.
+          Increasing Preference weight prioritizes personal fit more; Deal weight is automatically the remaining percentage.
+        </p>
+        <label htmlFor="preference-weight-percent" className="mt-5 block text-sm font-medium text-zinc-700">Preference weight (%)</label>
+        <input id="preference-weight-percent" type="number" min="0" max="100" step="1" value={preferenceWeightPercent} onChange={(event) => { setPreferenceWeightPercent(event.target.valueAsNumber); setSaveState("idle"); }} className="mt-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm" />
+        <p className="mt-2 text-sm text-zinc-500">Deal weight: {safeDealWeightPercent(preferenceWeightPercent)}%</p>
       </div>
 
       <div className="mt-10 border-t border-zinc-200 pt-8">

@@ -151,6 +151,25 @@ test("carries Vinted display-title fields through the selected highlight without
   assert.equal(highlight?.translatedListingTextDa, "marineblå blazer med mærke");
 });
 
+test("a configured preference weight changes which new products qualify", () => {
+  const preferenceHeavyCandidates = [
+    candidate("preference-heavy", { inserted: true, preferenceScore: 9, dealScore: 3 }),
+  ];
+
+  assert.equal(selectSlackHighlight(preferenceHeavyCandidates), null);
+  assert.equal(selectSlackHighlight(preferenceHeavyCandidates, 90)?.productId, "preference-heavy");
+});
+
+test("a configured preference weight can flip new-candidate ranking", () => {
+  const tradeoffCandidates = [
+    candidate("deal-heavy", { inserted: true, preferenceScore: 7, dealScore: 10 }),
+    candidate("preference-heavy", { inserted: true, preferenceScore: 10, dealScore: 7 }),
+  ];
+
+  assert.equal(selectSlackHighlight(tradeoffCandidates)?.productId, "preference-heavy");
+  assert.equal(selectSlackHighlight(tradeoffCandidates, 20)?.productId, "deal-heavy");
+});
+
 test("hidden products, price increases, and missing valid price drops never qualify", () => {
   assert.equal(
     selectSlackHighlight([

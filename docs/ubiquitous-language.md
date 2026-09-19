@@ -132,10 +132,18 @@ deal score rather than being guessed.
 
 The ranking score used to combine preference and deal quality.
 
-Current intended weighting:
+Overall score is a weighted combination of Preference score and Deal score:
 
-- 60% Preference
-- 40% Deal
+- Overall = (Preference weight × Preference score + Deal weight × Deal score) / 100
+
+The Preference weight is configurable in Settings as `preferenceWeightPercent`
+(0-100). Deal weight is always derived as `100 - preferenceWeightPercent` and
+is never stored independently. The default, and the weighting used unless a
+user configures otherwise, is 60% Preference / 40% Deal.
+
+Changing the weighting changes how Preference and Deal scores are combined
+into Overall score. It does not change how Preference score or Deal score
+themselves are produced.
 
 Overall score is a ranking mechanism, not an independent AI judgment.
 

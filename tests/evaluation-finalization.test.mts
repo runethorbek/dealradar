@@ -15,6 +15,7 @@ test("finalizes completed persisted work once and uses successful persisted eval
     if (query.includes("SET notification_sent")) { sent = true; return [{ id: "7" }]; }
     if (query.includes("import_summary")) return [{ importSummary: { ref: "abc", productsProcessed: 3, productsInserted: 2, productsUpdated: 1, snapshotsInserted: 3 }, scanWarnings: [] }];
     if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
+    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   const messages: string[] = [];
@@ -24,6 +25,56 @@ test("finalizes completed persisted work once and uses successful persisted eval
   assert.equal(messages.length, 1);
   assert.match(messages[0], /3 processed.*2 new.*1 updated.*3 snapshots.*1 evaluated/);
   assert.match(messages[0], /Top recommendation:\nA/);
+});
+
+test("uses the persisted ranking weight to select the Slack top recommendation", async () => {
+  let claimed = false;
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+    if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000008", notificationClaimToken: "claim-8" }]; }
+    if (query.includes("SET notification_sent")) return [{ id: "7" }];
+    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [
+      { productId: "preference-heavy", externalUrl: "https://example.com/a", title: "Preference heavy", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 3 },
+      { productId: "deal-heavy", externalUrl: "https://example.com/b", title: "Deal heavy", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 3, dealScore: 9 },
+    ];
+    if (query.includes("FROM application_settings")) return [{ ranking: { preferenceWeightPercent: 20 } }];
+    throw new Error(query);
+  };
+  const messages: string[] = [];
+  await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
+  assert.match(messages[0], /Top recommendation:\nDeal heavy/);
+});
+
+test("a ranking-settings read failure after the claim is acquired releases the claim through the normal error path", async () => {
+  let claimed = false;
+  let notificationSent = false;
+  let deliveries = 0;
+  let applicationSettingsCalls = 0;
+  const sql: EvaluationRunSql = async (strings) => {
+    const query = strings.join("$parameter");
+    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun, notificationSent }];
+    if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000009", notificationClaimToken: "claim-9" }]; }
+    if (query.includes("SET notification_sent")) { notificationSent = true; return [{ id: "7" }]; }
+    if (query.includes("SET notification_claimed_at = NULL")) { claimed = false; return []; }
+    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
+    if (query.includes("FROM application_settings")) {
+      applicationSettingsCalls += 1;
+      if (applicationSettingsCalls === 1) throw new Error("connection reset");
+      return [{ ranking: null }];
+    }
+    throw new Error(query);
+  };
+  const dependencies = { sql, run: completedRun, postSlackMessage: async () => { deliveries += 1; return { success: true }; } };
+
+  await assert.rejects(finalizeEvaluationRun(dependencies), /can be retried/);
+  assert.equal(deliveries, 0, "Slack must not be contacted when the ranking-settings read fails first");
+  assert.equal(claimed, false, "the notification claim must be released on the failed read");
+
+  assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: true, notificationSent: true });
+  assert.equal(deliveries, 1);
 });
 
 test("does not finalize before all candidates are terminal", async () => {
@@ -43,6 +94,7 @@ test("reloads terminality from Postgres instead of trusting a stale workflow sna
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
     if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) return [];
+    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   await finalizeEvaluationRun({ sql, run: { ...completedRun, status: "running", pendingCandidates: 1 }, postSlackMessage: async () => { deliveries += 1; return { success: true }; } });
@@ -59,6 +111,7 @@ test("a Slack failure remains terminal and cannot trigger another delivery or Ge
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
     if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) { claimed = false; return []; }
+    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   const dependencies = { sql, run: completedRun, postSlackMessage: async () => { deliveries += 1; return { success: false, error: "unavailable" }; } };
@@ -75,6 +128,7 @@ test("a thrown Slack error is non-fatal after the one persisted claim", async ()
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
     if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) return [];
+    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   await assert.rejects(finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async () => { throw new Error("network"); } }), /can be retried/);

@@ -747,3 +747,54 @@ test("the highlighted-product fallback respects the selected monitor", async () 
   assert.match(queryCalls[1]?.query ?? "", /p\.raw_data -> 'monitor_ids' \? \$parameter/);
   assert.ok(queryCalls[1]?.values.includes("monitor-alpha"));
 });
+
+test("best_match ordering defaults to the 60/40 preference/deal weighting when none is configured", async () => {
+  reset();
+  listProducts = [{ id: "p1", lastSeenAt: cutoff.toISOString(), source: "vinted.com" }];
+
+  await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null);
+
+  const call = queryCalls[0]!;
+  assert.doesNotMatch(call.query, /0\.6|0\.4/);
+  assert.match(call.query, /pe\.preference_score \* \$parameter \/ 100\.0 \+ pe\.deal_score \* \$parameter \/ 100\.0/);
+  assert.ok(call.values.includes(60));
+  assert.ok(call.values.includes(40));
+});
+
+test("best_match ordering passes a configured preference weight and its derived deal weight into the SQL", async () => {
+  reset();
+  listProducts = [{ id: "p1", lastSeenAt: cutoff.toISOString(), source: "vinted.com" }];
+
+  await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null, null, null, 80);
+
+  const call = queryCalls[0]!;
+  assert.ok(call.values.includes(80));
+  assert.ok(call.values.includes(20));
+});
+
+test("best_match ordering supports the 0 and 100 preference weight boundaries, deriving the opposite deal weight", async () => {
+  reset();
+  listProducts = [{ id: "p1", lastSeenAt: cutoff.toISOString(), source: "vinted.com" }];
+
+  await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null, null, null, 0);
+  assert.ok(queryCalls[0]!.values.includes(0));
+  assert.ok(queryCalls[0]!.values.includes(100));
+
+  reset();
+  listProducts = [{ id: "p1", lastSeenAt: cutoff.toISOString(), source: "vinted.com" }];
+  await getLatestDashboardProducts(sql, "vinted.com", "best_match", "visible", "24h", null, null, null, 100);
+  assert.ok(queryCalls[0]!.values.includes(100));
+  assert.ok(queryCalls[0]!.values.includes(0));
+});
+
+test("best_match ordering uses the configured weighting for the unfiltered (all-sources) query too", async () => {
+  reset();
+  listProducts = [{ id: "p1", lastSeenAt: cutoff.toISOString(), source: "vinted.com" }];
+
+  await getLatestDashboardProducts(sql, null, "best_match", "visible", "24h", null, null, null, 80);
+
+  const call = queryCalls[0]!;
+  assert.doesNotMatch(call.query, /0\.6|0\.4/);
+  assert.ok(call.values.includes(80));
+  assert.ok(call.values.includes(20));
+});

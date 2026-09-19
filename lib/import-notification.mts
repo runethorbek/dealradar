@@ -1,4 +1,5 @@
 import { getProductDisplayTitle } from "./vinted-display-title.mts";
+import { defaultRankingSettings, getOverallScore as computeOverallScore } from "./ranking-settings.mts";
 
 export type ImportRecommendation = {
   productId: string;
@@ -57,15 +58,20 @@ const maximumFailureErrorLength = 240;
 export function getOverallEvaluationScore(
   preferenceScore: number,
   dealScore: number,
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
 ) {
-  return preferenceScore * 0.6 + dealScore * 0.4;
+  return computeOverallScore(preferenceScore, dealScore, preferenceWeightPercent);
 }
 
-function getOverallScore(recommendation: ImportRecommendation) {
+function getOverallScore(
+  recommendation: ImportRecommendation,
+  preferenceWeightPercent: number,
+) {
   return Math.round(
     getOverallEvaluationScore(
       recommendation.preferenceScore,
       recommendation.dealScore,
+      preferenceWeightPercent,
     ),
   );
 }
@@ -218,9 +224,16 @@ function getDisplayPrice(recommendation: ImportSlackHighlight) {
   return null;
 }
 
-function selectHighestRanked(recommendations: ImportRecommendation[]) {
+function selectHighestRanked(
+  recommendations: ImportRecommendation[],
+  preferenceWeightPercent: number,
+) {
   return recommendations.reduce<ImportRecommendation | null>((best, item) => {
-    if (!best || getOverallScore(item) > getOverallScore(best)) {
+    if (
+      !best ||
+      getOverallScore(item, preferenceWeightPercent) >
+        getOverallScore(best, preferenceWeightPercent)
+    ) {
       return item;
     }
 
@@ -230,6 +243,7 @@ function selectHighestRanked(recommendations: ImportRecommendation[]) {
 
 export function selectTopRecommendation(
   recommendations: ImportRecommendation[],
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
 ) {
   const visibleRecommendations = recommendations.filter(
     (item) => !item.hidden,
@@ -239,7 +253,7 @@ export function selectTopRecommendation(
   );
 
   if (normalizedPriceRecommendations.length > 0) {
-    return selectHighestRanked(normalizedPriceRecommendations);
+    return selectHighestRanked(normalizedPriceRecommendations, preferenceWeightPercent);
   }
 
   return selectHighestRanked(
@@ -247,6 +261,7 @@ export function selectTopRecommendation(
       (item) =>
         item.sourceCurrentPrice !== null && item.sourceCurrency !== null,
     ),
+    preferenceWeightPercent,
   );
 }
 

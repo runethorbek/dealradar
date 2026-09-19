@@ -2,11 +2,12 @@ import type { OwnerAuthorization } from "./owner-authorization.mts";
 import { parseGeminiSettings, type GeminiSettings } from "./gemini-settings.mts";
 import { parseVintedSettings, type VintedSettings } from "./vinted-settings.mts";
 import { parseBrandFilterSettings, type BrandFilterSettings } from "./brand-filter-settings.mts";
+import { parseRankingSettings, type RankingSettings } from "./ranking-settings.mts";
 
-type SavedSettings = { vinted: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings; updatedAt: string };
+type SavedSettings = { vinted: VintedSettings; gemini?: GeminiSettings; brandFilter?: BrandFilterSettings; ranking?: RankingSettings; updatedAt: string };
 type SettingsHandlerDependencies = {
   authorize: () => Promise<OwnerAuthorization>;
-  save: (vinted: VintedSettings, gemini?: GeminiSettings, brandFilter?: BrandFilterSettings) => Promise<SavedSettings>;
+  save: (vinted: VintedSettings, gemini?: GeminiSettings, brandFilter?: BrandFilterSettings, ranking?: RankingSettings) => Promise<SavedSettings>;
 };
 
 export async function handleSettingsPost(request: Request, dependencies: SettingsHandlerDependencies) {
@@ -36,8 +37,16 @@ export async function handleSettingsPost(request: Request, dependencies: Setting
     brandFilter = parsedBrandFilter;
   }
 
+  const rankingValue = (body as Record<string, unknown>).ranking;
+  let ranking: RankingSettings | undefined;
+  if (rankingValue !== undefined) {
+    const parsedRanking = parseRankingSettings(rankingValue);
+    if (!parsedRanking) return Response.json({ success: false, error: "Invalid ranking settings." }, { status: 400 });
+    ranking = parsedRanking;
+  }
+
   try {
-    return Response.json({ success: true, ...(await dependencies.save(vinted, gemini, brandFilter)) });
+    return Response.json({ success: true, ...(await dependencies.save(vinted, gemini, brandFilter, ranking)) });
   } catch {
     return Response.json({ success: false, error: "Settings could not be saved." }, { status: 500 });
   }

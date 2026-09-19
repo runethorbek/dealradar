@@ -471,3 +471,56 @@ test("an authorized Evaluate attempt renders the returned evaluation", async () 
     /Could not evaluate this product\.|Sign in to evaluate this product\.|permission to evaluate this product/,
   );
 });
+
+test("the Overall score defaults to the 60/40 preference/deal weighting when none is configured", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+
+  await act(async () => {
+    root?.render(
+      createElement(ProductCard, {
+        product: {
+          ...product,
+          evaluation: {
+            preferenceScore: 9,
+            dealScore: 3,
+            reason: "Reason.",
+            translatedListingTextDa: null,
+            evaluatedAt: "2026-08-30T12:00:00.000Z",
+          },
+        },
+        authCallbackPath,
+      }),
+    );
+  });
+
+  assert.match(container.textContent ?? "", /Overall 7\/10/);
+});
+
+test("the Overall score uses a configured preference weight", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+
+  await act(async () => {
+    root?.render(
+      createElement(ProductCard, {
+        product: {
+          ...product,
+          evaluation: {
+            preferenceScore: 9,
+            dealScore: 3,
+            reason: "Reason.",
+            translatedListingTextDa: null,
+            evaluatedAt: "2026-08-30T12:00:00.000Z",
+          },
+        },
+        authCallbackPath,
+        preferenceWeightPercent: 90,
+      }),
+    );
+  });
+
+  assert.match(container.textContent ?? "", /Overall 8\/10/);
+});

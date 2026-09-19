@@ -18,6 +18,11 @@ let transactionResultFactory: ((query: {
   values: unknown[];
 }) => Record<string, unknown>) | null = null;
 let storedGeminiSettings: unknown;
+let storedRankingSettings: unknown;
+let highlightStateRows: Record<string, unknown>[] = [
+  { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
+];
+const slackMessages: string[] = [];
 
 process.env.DATABASE_URL = "postgresql://test-only";
 process.env.GEMINI_API_KEY = "test-only";
@@ -39,14 +44,8 @@ mockModule("@neondatabase/serverless", {
       return Object.assign(query, {
         then: (resolve: (rows: Array<Record<string, unknown>>) => unknown) =>
           resolve(query.text.includes("SELECT vinted, gemini")
-            ? [{ vinted: undefined, gemini: storedGeminiSettings }]
-            : [{
-                productId: "42",
-                watched: false,
-                feedback: null,
-                preferenceScore: 8,
-                dealScore: 7,
-              }]),
+            ? [{ vinted: undefined, gemini: storedGeminiSettings, ranking: storedRankingSettings }]
+            : highlightStateRows),
       });
     };
 
@@ -87,8 +86,9 @@ mockModule("@/lib/product-evaluation", {
   },
 });
 mockModule("@/lib/slack", {
-  postSlackMessage: async () => {
+  postSlackMessage: async (message: string) => {
     slackCalls += 1;
+    slackMessages.push(message);
     return { success: true };
   },
 });
@@ -133,6 +133,11 @@ function reset() {
   persistedQueries = [];
   transactionResultFactory = null;
   storedGeminiSettings = undefined;
+  storedRankingSettings = undefined;
+  highlightStateRows = [
+    { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
+  ];
+  slackMessages.length = 0;
 }
 
 function importRequest(authorization?: string) {
@@ -353,6 +358,72 @@ test("zero-candidate imports send one direct summary without durable work", asyn
   const body = await response.json();
   assert.equal(body.evaluationRunId, null);
   assert.equal(body.productsEvaluated, 0);
+});
+
+function twoProductZeroCandidateSetup() {
+  const productAUrl = "https://www.zalando.dk/items/product-a";
+  const productBUrl = "https://www.zalando.dk/items/product-b";
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+
+    if (url.includes("zalando-latest.json")) {
+      return Response.json(validFeed(url, [
+        { url: productAUrl, title: "Product A", currency: "DKK", current_price: 1200 },
+        { url: productBUrl, title: "Product B", currency: "DKK", current_price: 1200 },
+      ]));
+    }
+
+    return Response.json(validFeed(url));
+  };
+
+  transactionResultFactory = (query) => {
+    const isProductA = query.values.includes(productAUrl);
+
+    return {
+      productId: isProductA ? "product-a" : "product-b",
+      externalUrl: isProductA ? productAUrl : productBUrl,
+      title: isProductA ? "Product A" : "Product B",
+      currentPrice: "1200",
+      currency: "DKK",
+      sourceCurrentPrice: null,
+      sourceCurrency: null,
+      hidden: false,
+      inserted: false,
+      snapshotId: isProductA ? "snapshot-a" : "snapshot-b",
+      priceChanged: false,
+      priceDropPercent: "20",
+      discountPercent: null,
+    };
+  };
+
+  highlightStateRows = [
+    { productId: "product-a", watched: false, feedback: null, preferenceScore: 9, dealScore: 3 },
+    { productId: "product-b", watched: false, feedback: null, preferenceScore: 3, dealScore: 9 },
+  ];
+}
+
+test("zero-candidate imports use the persisted ranking weight to break a tie between existing price drops", async () => {
+  reset();
+  storedRankingSettings = { preferenceWeightPercent: 20 };
+  twoProductZeroCandidateSetup();
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(slackMessages.length, 1);
+  assert.match(slackMessages[0]!, /Top recommendation:\nProduct B/);
+});
+
+test("zero-candidate imports default to 60/40 weighting when no ranking setting is configured", async () => {
+  reset();
+  twoProductZeroCandidateSetup();
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(slackMessages.length, 1);
+  assert.match(slackMessages[0]!, /Top recommendation:\nProduct A/);
 });
 
 test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {

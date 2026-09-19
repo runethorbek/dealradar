@@ -24,6 +24,7 @@ import {
 } from "@/lib/dashboard-freshness.mts";
 import { parseDashboardBrand } from "@/lib/dashboard-brand.mts";
 import { defaultBrandFilterSettings, parseBrandFilterSettings } from "@/lib/brand-filter-settings.mts";
+import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-settings.mts";
 import { parseDashboardMonitor } from "@/lib/dashboard-monitor.mts";
 import { getDashboardHref } from "@/lib/dashboard-href.mts";
 import { ProductCard, type ProductCardProduct } from "./product-card";
@@ -54,13 +55,14 @@ async function getLatestProducts(
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], preferenceWeightPercent: defaultRankingSettings.preferenceWeightPercent, failed: true };
   }
 
   try {
     const sql = neon(databaseUrl);
     const dashboardSql = sql as DashboardSql;
-    const [settings] = await sql`SELECT brand_filter AS "brandFilter" FROM application_settings WHERE id = 1`;
+    const [settings] = await sql`SELECT brand_filter AS "brandFilter", ranking FROM application_settings WHERE id = 1`;
+    const preferenceWeightPercent = (parseRankingSettings(settings?.ranking) ?? defaultRankingSettings).preferenceWeightPercent;
     return {
       products: await getLatestDashboardProducts(
         dashboardSql,
@@ -71,16 +73,18 @@ async function getLatestProducts(
         highlightedProductId,
         brand,
         monitor,
+        preferenceWeightPercent,
       ),
       brands: source
         ? await getCurrentDashboardBrands(dashboardSql, source, freshness)
         : [],
       preferredBrands: (parseBrandFilterSettings(settings?.brandFilter) ?? defaultBrandFilterSettings).preferredBrands,
       monitors: await getCurrentDashboardMonitors(dashboardSql, source, freshness),
+      preferenceWeightPercent,
       failed: false,
     };
   } catch {
-    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], failed: true };
+    return { products: [] as ProductCardProduct[], brands: [] as string[], preferredBrands: [] as string[], monitors: [] as string[], preferenceWeightPercent: defaultRankingSettings.preferenceWeightPercent, failed: true };
   }
 }
 
@@ -100,7 +104,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   )
     ? (requestedSort as Sort)
     : "best_match";
-  const { products, brands, preferredBrands, monitors, failed } = await getLatestProducts(
+  const { products, brands, preferredBrands, monitors, preferenceWeightPercent, failed } = await getLatestProducts(
     selectedSource,
     selectedSort,
     selectedView,
@@ -175,6 +179,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               <ProductCard
                 key={product.id}
                 product={product}
+                preferenceWeightPercent={preferenceWeightPercent}
                 authCallbackPath={getDashboardHref(
                   selectedSource,
                   selectedSort,

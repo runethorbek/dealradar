@@ -4,6 +4,7 @@ import {
   type DashboardFreshness,
 } from "./dashboard-freshness.mts";
 import { includeRequestedProduct, type DashboardView } from "./dashboard-products.mts";
+import { defaultRankingSettings, getDealWeightPercent } from "./ranking-settings.mts";
 
 type DashboardSqlFragment = (
   strings: TemplateStringsArray,
@@ -90,8 +91,10 @@ export async function getLatestDashboardProducts(
   highlightedProductId: string | null,
   brand: string | null = null,
   monitor: string | null = null,
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
 ) {
   const freshnessHours = dashboardFreshnessHours(freshness);
+  const dealWeightPercent = getDealWeightPercent(preferenceWeightPercent);
   const selectedBrand = source ? brand : null;
   const rows = source
     ? await sql`
@@ -140,7 +143,7 @@ export async function getLatestDashboardProducts(
           (${sort} <> 'savings' AND pe.product_id IS NULL) ASC,
           CASE
             WHEN ${sort} = 'best_match'
-            THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
+            THEN ROUND(pe.preference_score * ${preferenceWeightPercent} / 100.0 + pe.deal_score * ${dealWeightPercent} / 100.0)
           END DESC NULLS LAST,
           CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
           CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
@@ -193,7 +196,7 @@ export async function getLatestDashboardProducts(
           (${sort} <> 'savings' AND pe.product_id IS NULL) ASC,
           CASE
             WHEN ${sort} = 'best_match'
-            THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
+            THEN ROUND(pe.preference_score * ${preferenceWeightPercent} / 100.0 + pe.deal_score * ${dealWeightPercent} / 100.0)
           END DESC NULLS LAST,
           CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
           CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,

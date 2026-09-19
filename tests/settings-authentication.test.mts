@@ -30,6 +30,38 @@ test("settings save without brand filter settings leaves the save call's optiona
   assert.equal(receivedBrandFilter, undefined);
 });
 
+test("settings validate, normalize, and persist a custom ranking preference weight", async () => {
+  let saved: unknown;
+  const response = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] }, ranking: { preferenceWeightPercent: 80 } }), {
+    authorize: async () => ({ status: "authorized" }),
+    save: async (vinted, gemini, brandFilter, ranking) => { saved = ranking; return { vinted, ranking, updatedAt: "2026-09-13T00:00:00.000Z" }; },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(saved, { preferenceWeightPercent: 80 });
+});
+
+test("settings accept the 0 and 100 preference weight boundaries", async () => {
+  for (const preferenceWeightPercent of [0, 100]) {
+    let saved: unknown;
+    const response = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] }, ranking: { preferenceWeightPercent } }), {
+      authorize: async () => ({ status: "authorized" }),
+      save: async (vinted, gemini, brandFilter, ranking) => { saved = ranking; return { vinted, ranking, updatedAt: "2026-09-13T00:00:00.000Z" }; },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(saved, { preferenceWeightPercent });
+  }
+});
+
+test("settings save without ranking settings leaves the save call's optional argument undefined", async () => {
+  let receivedRanking: unknown = "not called";
+  const response = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] } }), {
+    authorize: async () => ({ status: "authorized" }),
+    save: async (vinted, gemini, brandFilter, ranking) => { receivedRanking = ranking; return { vinted, updatedAt: "2026-09-13T00:00:00.000Z" }; },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(receivedRanking, undefined);
+});
+
 test("settings reject invalid values and unauthorized writes", async () => {
   let saveCalls = 0;
   const invalid = await handleSettingsPost(request({ vinted: { minimumCondition: "Bad", excludedBrands: [] } }), { authorize: async () => ({ status: "authorized" }), save: async () => { saveCalls += 1; throw new Error(); } });
@@ -41,6 +73,10 @@ test("settings reject invalid values and unauthorized writes", async () => {
   for (const brandFilter of [{ preferredBrands: "Mango" }, { preferredBrands: [1] }, { preferredBrands: null }, {}]) {
     const invalidBrandFilter = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] }, brandFilter }), { authorize: async () => ({ status: "authorized" }), save: async () => { saveCalls += 1; throw new Error(); } });
     assert.equal(invalidBrandFilter.status, 400);
+  }
+  for (const ranking of [{ preferenceWeightPercent: -1 }, { preferenceWeightPercent: 101 }, { preferenceWeightPercent: 50.5 }, { preferenceWeightPercent: "60" }, {}]) {
+    const invalidRanking = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] }, ranking }), { authorize: async () => ({ status: "authorized" }), save: async () => { saveCalls += 1; throw new Error(); } });
+    assert.equal(invalidRanking.status, 400);
   }
   const unauthorized = await handleSettingsPost(request({ vinted: { minimumCondition: null, excludedBrands: [] } }), { authorize: async () => ({ status: "unauthorized" }), save: async () => { saveCalls += 1; throw new Error(); } });
   assert.equal(unauthorized.status, 403);
