@@ -287,3 +287,20 @@ test("dashboard URLs continue to omit defaults and exclude Brand when no source 
     "/?source=vinted.com&sort=best_deal&view=watchlist&freshness=7d&brand=H%26M&monitor=monitor-alpha",
   );
 });
+
+test("dashboard URLs preserve the savings sort option", () => {
+  assert.equal(
+    getDashboardHref("zalando.dk", "savings", "visible", "24h", null, null),
+    "/?source=zalando.dk&sort=savings",
+  );
+});
+
+test("selecting the Savings sort navigates immediately while preserving compatible dashboard filters", async () => {
+  const container = await renderFilterBar();
+
+  await select(container, "Sort deals", "savings");
+
+  assert.deepEqual(navigations, [
+    "/?source=zalando.dk&sort=savings&view=hidden&freshness=7d&brand=Mango&monitor=monitor-alpha",
+  ]);
+});

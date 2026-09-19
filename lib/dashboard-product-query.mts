@@ -30,7 +30,7 @@ export const snapshotSummaryJoin = (sql: DashboardSqlFragment) => sql`
   ) snapshot_stats ON TRUE
 `;
 
-export type DashboardSort = "best_match" | "best_deal" | "newest";
+export type DashboardSort = "best_match" | "best_deal" | "newest" | "savings";
 export type DashboardSql = (
   strings: TemplateStringsArray,
   ...values: unknown[]
@@ -137,13 +137,14 @@ export async function getLatestDashboardProducts(
           )
           AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
-          (pe.product_id IS NULL) ASC,
+          (${sort} <> 'savings' AND pe.product_id IS NULL) ASC,
           CASE
             WHEN ${sort} = 'best_match'
             THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
           END DESC NULLS LAST,
           CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
           CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
+          CASE WHEN ${sort} = 'savings' THEN p.discount_percent END DESC NULLS LAST,
           p.last_seen_at DESC
         LIMIT 50
       `
@@ -189,13 +190,14 @@ export async function getLatestDashboardProducts(
           AND (${monitor}::text IS NULL OR p.raw_data -> 'monitor_ids' ? ${monitor})
           AND p.last_seen_at >= NOW() - ${freshnessHours} * INTERVAL '1 hour'
         ORDER BY
-          (pe.product_id IS NULL) ASC,
+          (${sort} <> 'savings' AND pe.product_id IS NULL) ASC,
           CASE
             WHEN ${sort} = 'best_match'
             THEN ROUND(pe.preference_score * 0.6 + pe.deal_score * 0.4)
           END DESC NULLS LAST,
           CASE WHEN ${sort} = 'best_deal' THEN pe.deal_score END DESC NULLS LAST,
           CASE WHEN ${sort} = 'newest' THEN p.last_seen_at END DESC NULLS LAST,
+          CASE WHEN ${sort} = 'savings' THEN p.discount_percent END DESC NULLS LAST,
           p.last_seen_at DESC
         LIMIT 50
       `;

@@ -37,6 +37,7 @@ const sortOptions: { label: string; value: Sort }[] = [
   { label: "Best match", value: "best_match" },
   { label: "Best deal", value: "best_deal" },
   { label: "Newest", value: "newest" },
+  { label: "Savings", value: "savings" },
 ];
 
 async function getLatestProducts(

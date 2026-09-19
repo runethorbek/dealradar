@@ -19,6 +19,8 @@ type ProductRow = {
   lowestObservedPrice?: string | null;
   currency?: string | null;
   rawData?: unknown;
+  discountPercent?: string | null;
+  evaluated?: boolean;
 };
 
 type SnapshotRow = {
@@ -127,7 +129,7 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
           typeof value === "string" &&
           !value.includes(".") &&
           !value.startsWith("monitor-") &&
-          ["best_match", "best_deal", "newest"].every((sort) => value !== sort),
+          ["best_match", "best_deal", "newest", "savings"].every((sort) => value !== sort),
       )
     : undefined;
   const brandFilteredProducts = brand
@@ -192,12 +194,34 @@ async function sql(strings: TemplateStringsArray, ...values: unknown[]) {
   });
 
   const sort = values.find(
-    (value): value is "best_match" | "best_deal" | "newest" =>
-      value === "best_match" || value === "best_deal" || value === "newest",
+    (value): value is "best_match" | "best_deal" | "newest" | "savings" =>
+      value === "best_match" || value === "best_deal" || value === "newest" || value === "savings",
   );
-  return sort === "newest"
-    ? result.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
-    : result;
+
+  let orderedResult = result;
+  if (sort === "newest") {
+    orderedResult = [...result].sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
+  } else if (sort === "savings") {
+    orderedResult = [...result].sort((left, right) => {
+      const leftValue = left.discountPercent == null ? null : Number(left.discountPercent);
+      const rightValue = right.discountPercent == null ? null : Number(right.discountPercent);
+      if (leftValue === null && rightValue !== null) return 1;
+      if (rightValue === null && leftValue !== null) return -1;
+      if (leftValue !== rightValue) return (rightValue as number) - (leftValue as number);
+      return right.lastSeenAt.localeCompare(left.lastSeenAt);
+    });
+  }
+
+  // Mirrors the `(${sort} <> 'savings' AND pe.product_id IS NULL) ASC` ORDER BY term:
+  // evaluated products sort first for every mode except savings, which is neutralized.
+  return sort === "savings"
+    ? orderedResult
+    : orderedResult.sort((left, right) => {
+        const leftUnevaluated = left.evaluated !== true;
+        const rightUnevaluated = right.evaluated !== true;
+        if (leftUnevaluated === rightUnevaluated) return 0;
+        return leftUnevaluated ? 1 : -1;
+      });
 }
 
 function reset() {
@@ -618,6 +642,84 @@ test("the highlighted-product fallback respects the selected source", async () =
   assert.match(queryCalls[1]?.query ?? "", /p\.source = \$parameter/);
   assert.match(queryCalls[1]?.query ?? "", /\$parameter::text IS NULL/);
   assert.ok(queryCalls[1]?.values.includes("vinted.com"));
+});
+
+test("savings sort orders products by discount_percent descending, with null savings last", async () => {
+  reset();
+  listProducts = [
+    { id: "thirty-percent", lastSeenAt: cutoff.toISOString(), discountPercent: "30" },
+    { id: "fifty-percent", lastSeenAt: cutoff.toISOString(), discountPercent: "50" },
+    { id: "no-savings", lastSeenAt: cutoff.toISOString(), discountPercent: null },
+    { id: "zero-percent", lastSeenAt: cutoff.toISOString(), discountPercent: "0" },
+    { id: "forty-five-percent", lastSeenAt: cutoff.toISOString(), discountPercent: "45" },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql, null, "savings", "visible", "24h", null,
+  );
+
+  assert.deepEqual(result.map((product) => product.id), [
+    "fifty-percent",
+    "forty-five-percent",
+    "thirty-percent",
+    "zero-percent",
+    "no-savings",
+  ]);
+});
+
+test("savings sort falls back to the existing deterministic ordering for equal percentages", async () => {
+  reset();
+  listProducts = [
+    { id: "older-tie", lastSeenAt: cutoff.toISOString(), discountPercent: "30" },
+    { id: "newer-tie", lastSeenAt: new Date(cutoff.getTime() + 1000).toISOString(), discountPercent: "30" },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql, null, "savings", "visible", "24h", null,
+  );
+
+  assert.deepEqual(result.map((product) => product.id), ["newer-tie", "older-tie"]);
+});
+
+test("savings sort is not overridden by evaluation presence", async () => {
+  reset();
+  listProducts = [
+    { id: "evaluated-low-discount", lastSeenAt: cutoff.toISOString(), discountPercent: "5", evaluated: true },
+    { id: "unevaluated-high-discount", lastSeenAt: cutoff.toISOString(), discountPercent: "90", evaluated: false },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql, null, "savings", "visible", "24h", null,
+  );
+
+  assert.deepEqual(result.map((product) => product.id), [
+    "unevaluated-high-discount",
+    "evaluated-low-discount",
+  ]);
+});
+
+test("savings sort on the source-filtered branch orders by discount_percent regardless of evaluation presence, with null last and a deterministic tie fallback", async () => {
+  reset();
+  listProducts = [
+    { id: "evaluated-low-discount", lastSeenAt: cutoff.toISOString(), source: "vinted.com", discountPercent: "5", evaluated: true },
+    { id: "unevaluated-high-discount", lastSeenAt: cutoff.toISOString(), source: "vinted.com", discountPercent: "90", evaluated: false },
+    { id: "no-savings", lastSeenAt: cutoff.toISOString(), source: "vinted.com", discountPercent: null },
+    { id: "older-tie", lastSeenAt: cutoff.toISOString(), source: "vinted.com", discountPercent: "40" },
+    { id: "newer-tie", lastSeenAt: new Date(cutoff.getTime() + 1000).toISOString(), source: "vinted.com", discountPercent: "40" },
+  ];
+
+  const result = await getLatestDashboardProducts(
+    sql, "vinted.com", "savings", "visible", "24h", null,
+  );
+
+  assert.deepEqual(result.map((product) => product.id), [
+    "unevaluated-high-discount",
+    "newer-tie",
+    "older-tie",
+    "evaluated-low-discount",
+    "no-savings",
+  ]);
+  assert.match(queryCalls[0]!.query, /p\.source = \$parameter/);
 });
 
 test("the highlighted-product fallback respects the selected monitor", async () => {

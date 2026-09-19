@@ -18,6 +18,7 @@ const sortOptions: { label: string; value: DashboardSort }[] = [
   { label: "Best match", value: "best_match" },
   { label: "Best deal", value: "best_deal" },
   { label: "Newest", value: "newest" },
+  { label: "Savings", value: "savings" },
 ];
 
 const viewOptions: { label: string; value: DashboardView }[] = [
