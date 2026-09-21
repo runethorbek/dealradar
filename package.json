@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test tests/price-history-summary.test.mts tests/ranking-settings.test.mts tests/import-notification.test.mts tests/slack-highlight.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/product-watch.test.mts tests/preferences-authentication.test.mts tests/settings-authentication.test.mts tests/vinted-preselection.test.mts tests/vinted-display-title.test.mts tests/product-feedback-authentication.test.mts tests/product-schema-migration.test.mts tests/evaluation-run-schema-migration.test.mts && node --import tsx --test tests/auth-configuration.test.mts tests/evaluation-runs.test.mts tests/evaluation-batches.test.mts tests/evaluation-finalization.test.mts && node --experimental-loader ./tests/path-alias-loader.mjs --experimental-test-module-mocks --test tests/dashboard-products-query.test.mts tests/import-deals-route-authentication.test.mts tests/evaluate-product-route-authentication.test.mts tests/product-feedback-route-authentication.test.mts tests/product-visibility-route-authentication.test.mts tests/product-watch-route-authentication.test.mts tests/evaluation-run-orchestration.test.mts tests/preferences-route-authentication.test.mts && node --import tsx --experimental-test-module-mocks --test tests/dashboard-filter-bar.test.mts tests/product-card-feedback-authentication-component.test.mts tests/preferences-form-authentication-component.test.mts"
+    "test": "node --test tests/price-history-summary.test.mts tests/ranking-settings.test.mts tests/import-notification.test.mts tests/slack-highlight.test.mts tests/dashboard-products.test.mts tests/product-visibility.test.mts tests/product-watch.test.mts tests/preferences-authentication.test.mts tests/settings-authentication.test.mts tests/vinted-preselection.test.mts tests/vinted-display-title.test.mts tests/product-feedback-authentication.test.mts tests/product-schema-migration.test.mts tests/evaluation-run-schema-migration.test.mts && node --import tsx --test tests/auth-configuration.test.mts tests/evaluation-runs.test.mts tests/evaluation-batches.test.mts tests/evaluation-finalization.test.mts && node --experimental-loader ./tests/path-alias-loader.mjs --experimental-test-module-mocks --test tests/dashboard-products-query.test.mts tests/import-deals-route-authentication.test.mts tests/evaluate-product-route-authentication.test.mts tests/product-feedback-route-authentication.test.mts tests/product-visibility-route-authentication.test.mts tests/product-watch-route-authentication.test.mts tests/evaluation-run-orchestration.test.mts tests/preferences-route-authentication.test.mts && node --import tsx --experimental-test-module-mocks --test tests/dashboard-filter-bar.test.mts tests/product-card-feedback-authentication-component.test.mts tests/preferences-form-authentication-component.test.mts",
+    "test:integration": "node --experimental-loader ./tests/path-alias-loader.mjs --test tests/integration/import-persistence-dashboard.test.mts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testcontainers/postgresql": "^12.1.0",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -30,7 +32,9 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "jsdom": "^26.1.0",
+    "postgres": "^3.4.9",
     "tailwindcss": "^4",
+    "testcontainers": "^12.1.0",
     "tsx": "^4.20.6",
     "typescript": "^5"
   }

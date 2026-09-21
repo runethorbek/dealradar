@@ -156,6 +156,21 @@ Migrations are currently applied manually to Neon.
 
 Adding a migration file does not modify the production database automatically.
 
+### Real-PostgreSQL integration test
+
+`npm test` is fully deterministic and requires no database. A separate,
+Docker-based integration test additionally proves the current
+`migrations/*.sql` files apply cleanly, in order, against a real disposable
+PostgreSQL instance, and that the real import-persistence and dashboard-query
+code (`lib/import-persistence.mts`, `lib/dashboard-product-query.mts`)
+round-trip a small synthetic product feed correctly.
+
+- Prerequisite: Docker installed and running locally.
+- Command: `npm run test:integration`.
+- This is not part of `npm test` and is not wired into CI (see #54). It
+  starts and tears down its own ephemeral Postgres container
+  (via Testcontainers) per run; it never touches Neon or any shared database.
+
 ## Evaluation
 
 Gemini is an evaluation service, not the system of record.
