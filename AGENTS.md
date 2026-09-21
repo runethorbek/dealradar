@@ -47,6 +47,63 @@ When asked to implement or fix something:
 
 Do not commit, push, or deploy unless explicitly requested.
 
+## Branch, PR, and CI workflow
+
+DealRadar's default workflow is issue → branch → implementation → local
+verification → independent review coordinated by the repository owner →
+fixes if needed → push → PR → CI → human merge → automatic Vercel deploy →
+production smoke test where appropriate. See `docs/workflow.md` for the
+human-readable version of this flow.
+
+Implementation agents:
+
+1. Never implement directly on `main`.
+2. Before editing files, inspect the current git branch.
+3. If on `main`, create and switch to a dedicated issue/topic branch before
+   making any changes.
+4. Name the branch after the issue, e.g. `issue-54-ci-workflow`,
+   `issue-51-postgres-integration-test`.
+5. Inspect the issue/specification and relevant existing code before
+   implementing.
+6. Implement the smallest scoped change.
+7. Run the appropriate local verification (`npm test`, `npm run lint`,
+   `next build`, and any other checks relevant to the change).
+8. Stop and report the implementation and verification results.
+
+Independent review of the branch/diff is coordinated by the repository
+owner. The implementation agent must not assume review is complete and must
+not start its own review agent unless explicitly asked.
+
+Once the repository owner confirms the change is ready for a PR, the
+implementation agent:
+
+9. Pushes the current issue branch.
+10. Opens a pull request targeting `main`.
+11. Includes in the PR description: the issue reference, a concise change
+    summary, verification performed, any migrations/manual steps required,
+    and known limitations or deferred follow-ups.
+12. Inspects and reports CI status when possible.
+
+Implementation agents must not:
+
+- push directly to `main`;
+- merge a pull request;
+- enable or change branch protection;
+- change repository access or settings without explicit approval.
+
+Review agents are read-only by default: they inspect the diff and report
+findings, and must not modify code, push, merge, or broaden the task unless
+explicitly asked.
+
+## CI
+
+`.github/workflows/ci.yml` (job `verify`, required check name "CI / verify")
+runs `npm test`, `npm run lint`, and `npm run build` (`next build`) on pull
+requests targeting `main` and on pushes to `main`. It requires no live
+Gemini, Slack, Neon, or other production-service credentials. The
+Postgres integration test (`npm run test:integration`, see
+`docs/architecture.md`) is intentionally not part of this workflow.
+
 ## Repository documentation
 
 Read the documentation relevant to the change before editing:
