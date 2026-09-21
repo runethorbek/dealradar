@@ -7,7 +7,9 @@ deterministic suite (`npm test`) uses.
 
 Produced for #52, a follow-up to #48 (`docs/test-audit.md`, Sections 5–6).
 This document defines **what runs, on what, and when**. It does not define
-per-checkpoint failure localization — see [Relationship to #51, #53, #54](#relationship-to-51-53-54).
+per-checkpoint failure localization — see
+[`docs/smoke-test-diagnostics.md`](./smoke-test-diagnostics.md) (#53) and
+[Relationship to #51, #53, #54](#relationship-to-51-53-54).
 
 ## Purpose
 
@@ -438,7 +440,8 @@ Per `docs/test-audit.md` Section 5's original suggestions, refined here:
   does not redefine or duplicate that test; it only cites it as one leg of
   the smoke test.
 - **#53** extends this document with per-checkpoint evidence, "where to
-  inspect it," and "likely failed subsystem" for each step above. This
+  inspect it," and "likely failed subsystem" for each step above, in
+  [`docs/smoke-test-diagnostics.md`](./smoke-test-diagnostics.md). This
   document intentionally stops at "what runs and what the expected result
   is" — it does not attempt checkpoint-level failure localization, which is
   #53's distinct deliverable.
