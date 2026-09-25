@@ -14,7 +14,7 @@ test("finalizes completed persisted work once and uses successful persisted eval
     if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }]; }
     if (query.includes("SET notification_sent")) { sent = true; return [{ id: "7" }]; }
     if (query.includes("import_summary")) return [{ importSummary: { ref: "abc", productsProcessed: 3, productsInserted: 2, productsUpdated: 1, snapshotsInserted: 3 }, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
+    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
     if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
@@ -24,7 +24,7 @@ test("finalizes completed persisted work once and uses successful persisted eval
   assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: false, notificationSent: true });
   assert.equal(messages.length, 1);
   assert.match(messages[0], /3 processed.*2 new.*1 updated.*3 snapshots.*1 evaluated/);
-  assert.match(messages[0], /Top recommendation:\nA/);
+  assert.match(messages[0], /Zalando recommendation:\nA/);
 });
 
 test("uses the persisted ranking weight to select the Slack top recommendation", async () => {
@@ -36,15 +36,54 @@ test("uses the persisted ranking weight to select the Slack top recommendation",
     if (query.includes("SET notification_sent")) return [{ id: "7" }];
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
     if (query.includes("JOIN product_evaluations")) return [
-      { productId: "preference-heavy", externalUrl: "https://example.com/a", title: "Preference heavy", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 3 },
-      { productId: "deal-heavy", externalUrl: "https://example.com/b", title: "Deal heavy", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 3, dealScore: 9 },
+      { productId: "preference-heavy", externalUrl: "https://example.com/a", title: "Preference heavy", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 3 },
+      { productId: "deal-heavy", externalUrl: "https://example.com/b", title: "Deal heavy", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 3, dealScore: 9 },
     ];
     if (query.includes("FROM application_settings")) return [{ ranking: { preferenceWeightPercent: 20 } }];
     throw new Error(query);
   };
   const messages: string[] = [];
   await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
-  assert.match(messages[0], /Top recommendation:\nDeal heavy/);
+  assert.match(messages[0], /Zalando recommendation:\nDeal heavy/);
+});
+
+test("selects one recommendation per source from the run's completed evaluations", async () => {
+  const product = (productId: string, source: string, preferenceScore: number, dealScore: number, hidden = false) => ({
+    productId, externalUrl: `https://example.com/${productId}`, title: `Product ${productId}`, source, currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden, preferenceScore, dealScore,
+  });
+  const run = async (rows: ReturnType<typeof product>[]) => {
+    const messages: string[] = [];
+    const sql: EvaluationRunSql = async (strings) => {
+      const query = strings.join("$parameter");
+      if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+      if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000010", notificationClaimToken: "claim-10" }];
+      if (query.includes("SET notification_sent")) return [{ id: "7" }];
+      if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
+      if (query.includes("JOIN product_evaluations")) return rows;
+      if (query.includes("FROM application_settings")) return [{ ranking: null }];
+      throw new Error(query);
+    };
+    await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
+    return messages[0];
+  };
+
+  const both = await run([
+    product("20", "vinted.com", 10, 10, true),
+    product("21", "vinted.com", 8, 7),
+    product("22", "vinted.com", 9, 9),
+    product("30", "zalando.dk", 5, 5),
+  ]);
+  assert.match(both, /\n\nZalando recommendation:\nProduct 30\n[^\n]+\n\nVinted recommendation:\nProduct 22\n/);
+
+  // A Vinted listing below Overall 7 (8/5 -> 6.8) gives no Vinted recommendation,
+  // and a strong Vinted listing never displaces the Zalando one.
+  const vintedBelowThreshold = await run([product("21", "vinted.com", 8, 5), product("30", "zalando.dk", 5, 5)]);
+  assert.doesNotMatch(vintedBelowThreshold, /Vinted recommendation/);
+  assert.match(vintedBelowThreshold, /Zalando recommendation:\nProduct 30/);
+
+  const vintedOnly = await run([product("22", "vinted.com", 9, 9)]);
+  assert.doesNotMatch(vintedOnly, /Zalando recommendation/);
+  assert.match(vintedOnly, /Vinted recommendation:\nProduct 22/);
 });
 
 test("a ranking-settings read failure after the claim is acquired releases the claim through the normal error path", async () => {

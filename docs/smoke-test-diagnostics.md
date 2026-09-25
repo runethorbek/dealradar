@@ -321,10 +321,12 @@ Gemini call succeeding.
   WHERE id = <evaluationRunId>;
   ```
 - **Expected value/state:** `status = 'completed'`, `notification_sent =
-  true`, and one new Slack message referencing the evaluated product
-  (produced by `finalizeEvaluationRun` in
-  `lib/evaluation-finalization.mts`, via `formatImportSlackMessage`/
-  `selectTopRecommendation` in `lib/import-notification.mts`).
+  true`, and one new Slack message (produced by `finalizeEvaluationRun` in
+  `lib/evaluation-finalization.mts`, via `formatImportSlackMessage` in
+  `lib/import-notification.mts`). It references the evaluated product as the
+  Zalando recommendation (`selectTopRecommendation`), or as the Vinted
+  recommendation (`selectVintedRecommendation`) only when its unrounded
+  Overall score is at least 7; see `docs/recommendation-policy.md`.
 - **Likely subsystem if it fails**, given Checkpoint 8 already confirmed the
   evaluation is persisted and `evaluation_runs.status = 'completed'`:
   - `notification_claimed_at` is `NULL` and `notification_sent = false`

@@ -28,6 +28,14 @@ export type ImportSlackHighlight = Omit<
   dealScore: number | null;
 };
 
+export const vintedSource = "vinted.com";
+export const zalandoSource = "zalando.dk";
+
+export type SourceRecommendations = {
+  zalando: ImportSlackHighlight | null;
+  vinted: ImportSlackHighlight | null;
+};
+
 export type ImportSummary = {
   ref: string;
   productsProcessed: number;
@@ -51,6 +59,7 @@ export type PartialScanWarning = {
   failures: PartialScanFailure[];
 };
 
+const minimumRecommendationOverallScore = 7;
 const maximumRenderedFailures = 5;
 const maximumFailureNameLength = 120;
 const maximumFailureErrorLength = 240;
@@ -265,9 +274,75 @@ export function selectTopRecommendation(
   );
 }
 
+function hasNormalizedPrice(item: ImportRecommendation) {
+  return item.currentPrice !== null && item.currency !== null;
+}
+
+function hasSourcePrice(item: ImportRecommendation) {
+  return item.sourceCurrentPrice !== null && item.sourceCurrency !== null;
+}
+
+// Product ids are Postgres BIGINTs serialized as text, so ascending id order is
+// numeric rather than lexicographic: a shorter unsigned integer is smaller.
+function compareProductIds(left: string, right: string) {
+  if (/^\d+$/.test(left) && /^\d+$/.test(right) && left.length !== right.length) {
+    return left.length - right.length;
+  }
+
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+// Vinted recommendation (docs/recommendation-policy.md): the visible Vinted
+// product evaluated in this import with the highest unrounded Overall score,
+// provided it is at least 7. Ties: higher Deal score, then ascending product id.
+export function selectVintedRecommendation(
+  recommendations: ImportRecommendation[],
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
+) {
+  const overallScore = (item: ImportRecommendation) =>
+    getOverallEvaluationScore(item.preferenceScore, item.dealScore, preferenceWeightPercent);
+  const candidates = recommendations.filter(
+    (item) =>
+      item.source === vintedSource &&
+      !item.hidden &&
+      overallScore(item) >= minimumRecommendationOverallScore,
+  );
+  const normalizedPriceCandidates = candidates.filter(hasNormalizedPrice);
+  const pricedCandidates = normalizedPriceCandidates.length > 0
+    ? normalizedPriceCandidates
+    : candidates.filter(hasSourcePrice);
+
+  return [...pricedCandidates].sort(
+    (left, right) =>
+      overallScore(right) - overallScore(left) ||
+      right.dealScore - left.dealScore ||
+      compareProductIds(left.productId, right.productId),
+  )[0] ?? null;
+}
+
+function formatRecommendation(label: string, recommendation: ImportSlackHighlight) {
+  const displayPrice = getDisplayPrice(recommendation);
+  const scores =
+    recommendation.preferenceScore !== null && recommendation.dealScore !== null
+      ? `Preference ${recommendation.preferenceScore}/10 · ` +
+        `Deal ${recommendation.dealScore}/10 · `
+      : "";
+  const price = displayPrice
+    ? `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · `
+    : "";
+
+  return (
+    `\n\n${label} recommendation:\n` +
+    `${escapeSlackText(getRecommendationDisplayTitle(recommendation))}\n` +
+    scores +
+    price +
+    `<${escapeSlackText(recommendation.externalUrl)}|View product>`
+  );
+}
+
 export function formatImportSlackMessage(
   summary: ImportSummary,
-  recommendation: ImportSlackHighlight | null,
+  recommendations: SourceRecommendations,
   partialScanWarnings: PartialScanWarning[] = [],
 ) {
   const summaryMessage =
@@ -276,27 +351,15 @@ export function formatImportSlackMessage(
     ` · ${summary.productsUpdated} updated` +
     ` · ${summary.snapshotsInserted} snapshots` +
     ` · ${summary.productsEvaluated} evaluated`;
-  const displayPrice = recommendation
-    ? getDisplayPrice(recommendation)
-    : null;
   let message = summaryMessage;
 
-  if (recommendation) {
-    const scores =
-      recommendation.preferenceScore !== null && recommendation.dealScore !== null
-        ? `Preference ${recommendation.preferenceScore}/10 · ` +
-          `Deal ${recommendation.dealScore}/10 · `
-        : "";
-    const price = displayPrice
-      ? `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · `
-      : "";
+  // One recommendation per source; the sources are never compared.
+  if (recommendations.zalando) {
+    message += formatRecommendation("Zalando", recommendations.zalando);
+  }
 
-    message +=
-      `\n\nTop recommendation:\n` +
-      `${escapeSlackText(getRecommendationDisplayTitle(recommendation))}\n` +
-      scores +
-      price +
-      `<${escapeSlackText(recommendation.externalUrl)}|View product>`;
+  if (recommendations.vinted) {
+    message += formatRecommendation("Vinted", recommendations.vinted);
   }
 
   if (partialScanWarnings.length === 0) {
