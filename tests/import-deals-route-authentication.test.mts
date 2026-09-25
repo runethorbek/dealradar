@@ -22,6 +22,10 @@ let storedRankingSettings: unknown;
 let highlightStateRows: Record<string, unknown>[] = [
   { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
 ];
+let snapshotHistoryRows: Record<string, unknown>[] = [];
+let snapshotHistoryFails = false;
+let watchedHistoricalLowRows: Record<string, unknown>[] = [];
+let evaluationRunInputs: Array<Record<string, unknown>> = [];
 const slackMessages: string[] = [];
 
 process.env.DATABASE_URL = "postgresql://test-only";
@@ -42,10 +46,16 @@ mockModule("@neondatabase/serverless", {
       const query = { text: strings.join(" "), values };
       persistedQueries.push(query);
       return Object.assign(query, {
-        then: (resolve: (rows: Array<Record<string, unknown>>) => unknown) =>
-          resolve(query.text.includes("SELECT vinted, gemini")
+        then: (resolve: (rows: Array<Record<string, unknown>>) => unknown, reject: (error: unknown) => unknown) =>
+          snapshotHistoryFails && query.text.includes("FROM product_snapshots")
+            ? reject(new Error("connection reset"))
+            : resolve(query.text.includes("SELECT vinted, gemini")
             ? [{ vinted: undefined, gemini: storedGeminiSettings, ranking: storedRankingSettings }]
-            : highlightStateRows),
+            : query.text.includes("FROM product_snapshots")
+              ? snapshotHistoryRows
+              : query.text.includes("p.external_url")
+                ? watchedHistoricalLowRows
+                : highlightStateRows),
       });
     };
 
@@ -95,6 +105,7 @@ mockModule("@/lib/slack", {
 mockModule("@/lib/evaluation-runs.mts", {
   createEvaluationRun: async (_sql: unknown, input: { importRef: string; candidateProductIds: string[] }) => {
     evaluationRunsCreated += 1;
+    evaluationRunInputs.push(input);
     return ({
     id: "durable-run-7", importRef: input.importRef, status: "pending", startedAt: null, completedAt: null,
     notificationSent: false, createdAt: "2026-09-15T00:00:00.000Z", candidatesSelected: input.candidateProductIds.length,
@@ -137,6 +148,10 @@ function reset() {
   highlightStateRows = [
     { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
   ];
+  snapshotHistoryRows = [];
+  snapshotHistoryFails = false;
+  watchedHistoricalLowRows = [];
+  evaluationRunInputs = [];
   slackMessages.length = 0;
 }
 
@@ -445,6 +460,127 @@ test("zero-candidate imports never recommend Vinted, even for a Watched price dr
   assert.equal(evaluationRunsCreated, 0);
   assert.equal(slackMessages.length, 1);
   assert.doesNotMatch(slackMessages[0]!, /recommendation:/);
+});
+
+function watchedHistoricalLowSetup(inserted: boolean) {
+  const watchedUrl = "https://www.zalando.dk/items/watched";
+  const otherUrl = "https://www.zalando.dk/items/other";
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+
+    if (url.includes("zalando-latest.json")) {
+      return Response.json(validFeed(url, [
+        { url: watchedUrl, title: "Watched shoe", currency: "DKK", current_price: 500 },
+        { url: otherUrl, title: "Other shoe", currency: "DKK", current_price: 500 },
+      ]));
+    }
+
+    return Response.json(validFeed(url, []));
+  };
+
+  transactionResultFactory = (query) => {
+    const isWatched = query.values.includes(watchedUrl);
+
+    return {
+      productId: isWatched ? "5" : "6", source: "zalando.dk", externalUrl: isWatched ? watchedUrl : otherUrl,
+      title: isWatched ? "Watched shoe" : "Other shoe", currentPrice: "500", currency: "DKK",
+      sourceCurrentPrice: null, sourceCurrency: null, hidden: false, inserted,
+      snapshotId: isWatched ? "52" : "62", priceChanged: inserted,
+      // Under the interim rules the other product's larger drop would win.
+      priceDropPercent: isWatched ? null : "40", discountPercent: null,
+    };
+  };
+  // Watched history 500 → 600 → 500: a returning historical low.
+  snapshotHistoryRows = [
+    { snapshotId: "50", productId: "5", currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null },
+    { snapshotId: "51", productId: "5", currentPrice: "600.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null },
+    { snapshotId: "52", productId: "5", currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null },
+  ];
+  watchedHistoricalLowRows = [{
+    productId: "5", externalUrl: watchedUrl, title: "Watched shoe", source: "zalando.dk", brand: null,
+    currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null,
+    hidden: false, watched: true, preferenceScore: null, dealScore: null,
+  }];
+  highlightStateRows = [
+    { productId: "5", watched: true, feedback: null, preferenceScore: null, dealScore: null },
+    { productId: "6", watched: false, feedback: null, preferenceScore: null, dealScore: null },
+  ];
+}
+
+test("zero-candidate imports give a watched historical-low event first Zalando priority", async () => {
+  reset();
+  watchedHistoricalLowSetup(false);
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(evaluationRunsCreated, 0);
+  const snapshotQueries = persistedQueries.filter((query) => query.text.includes("FROM product_snapshots"));
+  assert.equal(snapshotQueries.length, 1, "one snapshot-history query per import");
+  assert.deepEqual(snapshotQueries[0]!.values[0], ["52", "62"]);
+  assert.equal(slackMessages.length, 1);
+  assert.match(slackMessages[0]!, /Zalando recommendation:\nWatched shoe\n500\.00 DKK/);
+});
+
+test("zero-candidate imports fall back to the interim Zalando rules without an event", async () => {
+  reset();
+  watchedHistoricalLowSetup(false);
+  // Watched history 500 → 500: remaining at the low is not an event.
+  snapshotHistoryRows = snapshotHistoryRows.filter((row) => row.snapshotId !== "51");
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(persistedQueries.some((query) => query.text.includes("p.external_url")), false);
+  assert.match(slackMessages[0]!, /Zalando recommendation:\nOther shoe/);
+});
+
+test("imports with evaluation candidates record watched historical-low events with the run", async () => {
+  reset();
+  watchedHistoricalLowSetup(true);
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(evaluationRunsCreated, 1);
+  assert.equal(slackCalls, 0);
+  const importContext = evaluationRunInputs[0]!.importContext as Record<string, unknown>;
+  assert.deepEqual(importContext.watchedHistoricalLows, [{ productId: "5", dropPercent: 16.6667 }]);
+});
+
+test("a failed watched historical-low detection degrades to the Zalando fallback instead of failing the import", async () => {
+  const warn = mock.method(console, "warn", () => {});
+
+  try {
+    reset();
+    watchedHistoricalLowSetup(false);
+    snapshotHistoryFails = true;
+
+    const zeroCandidateResponse = await POST(importRequest("Bearer valid-ingest-key"));
+
+    assert.equal(zeroCandidateResponse.status, 200);
+    assert.equal(evaluationRunsCreated, 0);
+    assert.equal(slackMessages.length, 1);
+    assert.match(slackMessages[0]!, /Zalando recommendation:\nOther shoe/);
+
+    reset();
+    watchedHistoricalLowSetup(true);
+    snapshotHistoryFails = true;
+
+    const candidateResponse = await POST(importRequest("Bearer valid-ingest-key"));
+
+    assert.equal(candidateResponse.status, 200);
+    assert.equal(evaluationRunsCreated, 1);
+    const importContext = evaluationRunInputs[0]!.importContext as Record<string, unknown>;
+    assert.deepEqual(importContext.watchedHistoricalLows, []);
+    assert.deepEqual(
+      warn.mock.calls.map((call) => call.arguments),
+      [["DealRadar watched historical-low detection failed."], ["DealRadar watched historical-low detection failed."]],
+    );
+  } finally {
+    warn.mock.restore();
+  }
 });
 
 test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {

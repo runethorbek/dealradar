@@ -284,7 +284,7 @@ function hasSourcePrice(item: ImportRecommendation) {
 
 // Product ids are Postgres BIGINTs serialized as text, so ascending id order is
 // numeric rather than lexicographic: a shorter unsigned integer is smaller.
-function compareProductIds(left: string, right: string) {
+export function compareProductIds(left: string, right: string) {
   if (/^\d+$/.test(left) && /^\d+$/.test(right) && left.length !== right.length) {
     return left.length - right.length;
   }

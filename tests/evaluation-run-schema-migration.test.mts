@@ -77,3 +77,9 @@ test("launch claims are additive and persisted", async () => {
   assert.match(migration, /launch_claimed_at/i);
   assert.doesNotMatch(migration, /DROP TABLE|DELETE\s+FROM/i);
 });
+
+test("watched historical-low events are recorded additively on evaluation runs", async () => {
+  const migration = await readFile(new URL("../migrations/026_evaluation_run_watched_historical_lows.sql", import.meta.url), "utf8");
+  assert.match(migration, /ADD COLUMN watched_historical_lows JSONB NOT NULL DEFAULT '\[\]'::JSONB/i);
+  assert.doesNotMatch(migration, /DROP TABLE|DROP COLUMN|DELETE\s+FROM/i);
+});

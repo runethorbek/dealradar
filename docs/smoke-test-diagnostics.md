@@ -324,7 +324,9 @@ Gemini call succeeding.
   true`, and one new Slack message (produced by `finalizeEvaluationRun` in
   `lib/evaluation-finalization.mts`, via `formatImportSlackMessage` in
   `lib/import-notification.mts`). It references the evaluated product as the
-  Zalando recommendation (`selectTopRecommendation`), or as the Vinted
+  Zalando recommendation (`selectTopRecommendation`) unless the run's
+  `watched_historical_lows` names a still-visible Watched Zalando product,
+  which then takes precedence, or as the Vinted
   recommendation (`selectVintedRecommendation`) only when its unrounded
   Overall score is at least 7; see `docs/recommendation-policy.md`.
 - **Likely subsystem if it fails**, given Checkpoint 8 already confirmed the

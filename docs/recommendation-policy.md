@@ -124,7 +124,8 @@ occurs for a product in an import when all of the following hold:
    less than or equal to the previous historical minimum.
 
 The **drop percentage** used for ranking is
-`(previous price − new price) / previous price × 100`.
+`(previous price − new price) / previous price × 100`, rounded to 4 decimal
+places so that nominally equal drops tie and the next tie-break decides.
 
 Examples (same currency, product Watched and visible):
 
@@ -144,10 +145,16 @@ values on the `products` row, the event compares against stored snapshots.
 The price-pair preference itself is unchanged.
 
 Whether an event occurred is only known during the import (it depends on the
-inserted snapshot). When the import has evaluation candidates, the Slack
-message is sent later by the evaluation finalizer, so the event must either be
-recorded with the evaluation run at import time or be recomputed there from
-the import's observations. That choice belongs to #59.
+inserted snapshot), so it is **detected at import time** with one
+snapshot-history query per import, over the stored history of visible Watched
+Zalando products that received a new observation. When the import has
+evaluation candidates, the Slack message is sent later by the evaluation
+finalizer, so the events (product id and drop percentage) are recorded with
+the evaluation run (`evaluation_runs.watched_historical_lows`, migration 026).
+When the recommendation is selected, the product's current state is re-read:
+a product that has been hidden or unwatched since the import no longer
+qualifies, and its current stored evaluation (if any) is used for the Overall
+tie-break.
 
 ## Like / Not for me
 
@@ -162,9 +169,10 @@ the import's observations. That choice belongs to #59.
 
 ## Current production paths
 
-As of #58, production implements the Vinted recommendation. The Zalando
-recommendation still uses the pre-#58 rules, restricted to Zalando products,
-until #59 and #60 land. Every import posts one Slack message with up to two
+As of #58, production implements the Vinted recommendation. As of #59, the
+Zalando recommendation implements step 1 (watched historical-low event); the
+Zalando fallback (step 2) still uses the pre-#58 rules, restricted to Zalando
+products, until #60 lands. Every import posts one Slack message with up to two
 entries, "Zalando recommendation" followed by "Vinted recommendation"; a
 source without a recommendation is omitted. Products whose source is neither
 Zalando nor Vinted are never recommended.
@@ -175,7 +183,17 @@ terminal, over the run's completed evaluations. It implements
 [Vinted recommendation](#vinted-recommendation) as specified. An import with
 no evaluation candidates has no Vinted recommendation.
 
-**Zalando (interim)** — two selection paths:
+**Zalando step 1** — `findWatchedHistoricalLows`
+(`lib/watched-historical-low.mts`), called from
+`app/api/import-deals/route.ts` with the snapshots this import inserted for
+Zalando products, detects the events. `selectWatchedHistoricalLowRecommendation`
+implements [Zalando recommendation](#zalando-recommendation) step 1 as
+specified. It runs in the import route when there are no evaluation
+candidates, and otherwise in `lib/evaluation-finalization.mts` from the events
+recorded with the run. Only when it selects nothing does the interim fallback
+apply.
+
+**Zalando fallback (interim)** — two selection paths:
 
 1. **No evaluation candidates in the import** —
    `selectSlackHighlight` (`lib/slack-highlight.mts`), called from
@@ -216,5 +234,6 @@ no evaluation candidates has no Vinted recommendation.
 | 5 | #61 | Reassess Like / Not for me (investigation) |
 
 #58 changed the Slack message from one highlight to up to two (one per
-source). Until #59 and #60 land, the Zalando entry keeps the pre-#58
-selection rules, restricted to Zalando products.
+source). #59 added the Zalando watched historical-low step. Until #60 lands,
+the Zalando fallback keeps the pre-#58 selection rules, restricted to Zalando
+products.

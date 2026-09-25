@@ -90,11 +90,12 @@ observation. Remaining at the same low price is not a new event. Watch gives no
 recommendation priority for Vinted. This does not change dashboard ranking,
 visibility, feedback, evaluation input, or the absence of target-price alerts.
 
-Current production still uses the earlier rule for Zalando until #59 is
-implemented: for the Zalando recommendation in imports with no evaluation
-candidates, a visible Watched Zalando product that existed before the import
-and has a valid same-currency price drop of at least 5% receives first
-selection priority. Since #58, Watch gives no Vinted priority in production.
+Since #59, production gives a watched historical-low event first Zalando
+priority in every import. Until #60 replaces the Zalando fallback, the interim
+fallback for imports with no evaluation candidates still gives a visible
+Watched Zalando product that existed before the import and has a valid
+same-currency price drop of at least 5% priority over other price drops.
+Since #58, Watch gives no Vinted priority in production.
 
 ## Preference score
 
@@ -173,9 +174,10 @@ Gemini's Preference score as secondary examples. The full rules are in
 A recommendation does not imply an instruction to purchase.
 
 Since #58, each import produces at most one Zalando and at most one Vinted
-recommendation, and the Vinted recommendation follows the policy. The Zalando
-recommendation does not yet follow it (#59, #60): Liked Zalando price drops
-still receive selection priority when an import has no evaluation candidates.
+recommendation, and the Vinted recommendation follows the policy. Since #59
+the Zalando watched historical-low step follows it; the Zalando fallback does
+not yet (#60): Liked Zalando price drops still receive selection priority when
+an import has no evaluation candidates and no watched historical-low event.
 See "Current production paths" in `docs/recommendation-policy.md`.
 
 ## New recommendation
