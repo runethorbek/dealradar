@@ -15,7 +15,6 @@ import {
   parsePartialScanWarning,
   zalandoSource,
 } from "@/lib/import-notification.mts";
-import { selectSlackHighlight } from "@/lib/slack-highlight.mts";
 import {
   findWatchedHistoricalLows,
   loadWatchedHistoricalLowCandidates,
@@ -434,59 +433,15 @@ export async function POST(request: Request) {
       }
     }
     console.info("DealRadar durable evaluation initiated.", { ...preselection.metrics, evaluationRunId });
-    const productIds = [...new Set(importResults.map((result) => result.productId))];
-    const highlightStateRows = evaluationCandidates.length === 0 && productIds.length
-      ? await sql`
-          SELECT
-            p.id::TEXT AS "productId",
-            p.watched,
-            pf.rating AS feedback,
-            pe.preference_score AS "preferenceScore",
-            pe.deal_score AS "dealScore",
-            pe.translated_listing_text_da AS "translatedListingTextDa"
-          FROM products p
-          LEFT JOIN product_feedback pf ON pf.product_id = p.id
-          LEFT JOIN product_evaluations pe ON pe.product_id = p.id
-          WHERE p.id = ANY(${productIds})
-        `
-      : [];
-    const highlightStateByProductId = new Map(
-      highlightStateRows.map((row) => [
-        String(row.productId),
-        {
-          watched: row.watched === true,
-          feedback:
-            row.feedback === "like" || row.feedback === "dislike"
-              ? row.feedback
-              : null,
-          preferenceScore:
-            typeof row.preferenceScore === "number" ? row.preferenceScore : null,
-          dealScore: typeof row.dealScore === "number" ? row.dealScore : null,
-          translatedListingTextDa:
-            typeof row.translatedListingTextDa === "string"
-              ? row.translatedListingTextDa
-              : null,
-        },
-      ]),
-    );
-    // A watched historical-low event takes Zalando priority (#59); otherwise
-    // Zalando keeps the pre-#58 highlight rules until #60 lands. Vinted is
-    // only recommended from products evaluated in this import, so an import
-    // with no evaluation candidates has no Vinted recommendation.
-    const watchedHistoricalLowHighlight = evaluationCandidates.length === 0
+    // A watched historical-low event is the only Zalando recommendation an
+    // import with no evaluation candidates can have: the Zalando fallback (#60)
+    // and the Vinted recommendation use products evaluated in this import.
+    const zalandoHighlight = evaluationCandidates.length === 0
       ? selectWatchedHistoricalLowRecommendation(
           await loadWatchedHistoricalLowCandidates(sql, watchedHistoricalLows),
           preferenceWeightPercent,
         )
       : null;
-    const zalandoHighlight = evaluationCandidates.length === 0 ? watchedHistoricalLowHighlight ?? selectSlackHighlight(
-      importResults.flatMap((result) => {
-        const state = highlightStateByProductId.get(result.productId);
-
-        return state && result.source === zalandoSource ? [{ ...result, ...state }] : [];
-      }),
-      preferenceWeightPercent,
-    ) : null;
     // There is no durable work to finalize when nothing was selected, so retain
     // one useful import notification without creating a stranded empty run.
     if (evaluationCandidates.length === 0) {

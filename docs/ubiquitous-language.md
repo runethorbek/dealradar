@@ -90,12 +90,10 @@ observation. Remaining at the same low price is not a new event. Watch gives no
 recommendation priority for Vinted. This does not change dashboard ranking,
 visibility, feedback, evaluation input, or the absence of target-price alerts.
 
-Since #59, production gives a watched historical-low event first Zalando
-priority in every import. Until #60 replaces the Zalando fallback, the interim
-fallback for imports with no evaluation candidates still gives a visible
-Watched Zalando product that existed before the import and has a valid
-same-currency price drop of at least 5% priority over other price drops.
-Since #58, Watch gives no Vinted priority in production.
+Since #60, the watched historical-low event is the only recommendation
+priority Watch gives in production: a Watched Zalando price drop that is not a
+watched historical-low event gives no priority, and Watch gives no Vinted
+priority.
 
 ## Preference score
 
@@ -173,12 +171,9 @@ Gemini's Preference score as secondary examples. The full rules are in
 
 A recommendation does not imply an instruction to purchase.
 
-Since #58, each import produces at most one Zalando and at most one Vinted
-recommendation, and the Vinted recommendation follows the policy. Since #59
-the Zalando watched historical-low step follows it; the Zalando fallback does
-not yet (#60): Liked Zalando price drops still receive selection priority when
-an import has no evaluation candidates and no watched historical-low event.
-See "Current production paths" in `docs/recommendation-policy.md`.
+Since #60, both the Vinted and the Zalando recommendation follow the policy;
+Liked products, including Liked Zalando price drops, receive no selection
+priority. See "Current production paths" in `docs/recommendation-policy.md`.
 
 ## New recommendation
 
@@ -188,10 +183,8 @@ the candidate pool for the Vinted recommendation and the Zalando fallback
 recommendation. Products evaluated in earlier imports are not new
 recommendations again.
 
-Since #58 the Vinted recommendation applies this definition. The interim
-Zalando recommendation does not yet apply the minimum Overall score when an
-import has evaluation candidates: the highest-ranked visible evaluated Zalando
-product is selected regardless of score, until #60 is implemented.
+The Vinted recommendation (since #58) and the Zalando fallback recommendation
+(since #60) apply this definition.
 
 ## Price change
 

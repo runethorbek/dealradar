@@ -19,9 +19,6 @@ let transactionResultFactory: ((query: {
 }) => Record<string, unknown>) | null = null;
 let storedGeminiSettings: unknown;
 let storedRankingSettings: unknown;
-let highlightStateRows: Record<string, unknown>[] = [
-  { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
-];
 let snapshotHistoryRows: Record<string, unknown>[] = [];
 let snapshotHistoryFails = false;
 let watchedHistoricalLowRows: Record<string, unknown>[] = [];
@@ -55,7 +52,7 @@ mockModule("@neondatabase/serverless", {
               ? snapshotHistoryRows
               : query.text.includes("p.external_url")
                 ? watchedHistoricalLowRows
-                : highlightStateRows),
+                : []),
       });
     };
 
@@ -145,9 +142,6 @@ function reset() {
   transactionResultFactory = null;
   storedGeminiSettings = undefined;
   storedRankingSettings = undefined;
-  highlightStateRows = [
-    { productId: "42", watched: false, feedback: null, preferenceScore: 8, dealScore: 7 },
-  ];
   snapshotHistoryRows = [];
   snapshotHistoryFails = false;
   watchedHistoricalLowRows = [];
@@ -412,34 +406,21 @@ function twoProductZeroCandidateSetup() {
       discountPercent: null,
     };
   };
-
-  highlightStateRows = [
-    { productId: "product-a", watched: false, feedback: null, preferenceScore: 9, dealScore: 3 },
-    { productId: "product-b", watched: false, feedback: null, preferenceScore: 3, dealScore: 9 },
-  ];
 }
 
-test("zero-candidate imports use the persisted ranking weight to break a tie between existing price drops", async () => {
-  reset();
-  storedRankingSettings = { preferenceWeightPercent: 20 };
-  twoProductZeroCandidateSetup();
-
-  const response = await POST(importRequest("Bearer valid-ingest-key"));
-
-  assert.equal(response.status, 200);
-  assert.equal(slackMessages.length, 1);
-  assert.match(slackMessages[0]!, /Zalando recommendation:\nProduct B/);
-});
-
-test("zero-candidate imports default to 60/40 weighting when no ranking setting is configured", async () => {
+test("zero-candidate imports have no Zalando fallback recommendation, even for large price drops", async () => {
   reset();
   twoProductZeroCandidateSetup();
 
   const response = await POST(importRequest("Bearer valid-ingest-key"));
 
   assert.equal(response.status, 200);
+  assert.equal(evaluationRunsCreated, 0);
   assert.equal(slackMessages.length, 1);
-  assert.match(slackMessages[0]!, /Zalando recommendation:\nProduct A/);
+  assert.doesNotMatch(slackMessages[0]!, /recommendation:/);
+  // No Like / Watch price-drop state is loaded: the Zalando fallback (#60)
+  // only uses products evaluated in this import.
+  assert.equal(persistedQueries.some((query) => query.text.includes("product_feedback")), false);
 });
 
 test("zero-candidate imports never recommend Vinted, even for a Watched price drop", async () => {
@@ -449,9 +430,6 @@ test("zero-candidate imports never recommend Vinted, even for a Watched price dr
     currentPrice: "1000", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, inserted: false,
     snapshotId: "snapshot-vinted", priceChanged: false, priceDropPercent: "30", discountPercent: null,
   });
-  highlightStateRows = [
-    { productId: "vinted-watched", watched: true, feedback: "like", preferenceScore: 10, dealScore: 10 },
-  ];
   globalThis.fetch = async (input) => Response.json(validFeed(String(input)));
 
   const response = await POST(importRequest("Bearer valid-ingest-key"));
@@ -487,7 +465,7 @@ function watchedHistoricalLowSetup(inserted: boolean) {
       title: isWatched ? "Watched shoe" : "Other shoe", currentPrice: "500", currency: "DKK",
       sourceCurrentPrice: null, sourceCurrency: null, hidden: false, inserted,
       snapshotId: isWatched ? "52" : "62", priceChanged: inserted,
-      // Under the interim rules the other product's larger drop would win.
+      // A price drop without a watched historical-low event gives no priority.
       priceDropPercent: isWatched ? null : "40", discountPercent: null,
     };
   };
@@ -502,10 +480,6 @@ function watchedHistoricalLowSetup(inserted: boolean) {
     currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null,
     hidden: false, watched: true, preferenceScore: null, dealScore: null,
   }];
-  highlightStateRows = [
-    { productId: "5", watched: true, feedback: null, preferenceScore: null, dealScore: null },
-    { productId: "6", watched: false, feedback: null, preferenceScore: null, dealScore: null },
-  ];
 }
 
 test("zero-candidate imports give a watched historical-low event first Zalando priority", async () => {
@@ -523,7 +497,7 @@ test("zero-candidate imports give a watched historical-low event first Zalando p
   assert.match(slackMessages[0]!, /Zalando recommendation:\nWatched shoe\n500\.00 DKK/);
 });
 
-test("zero-candidate imports fall back to the interim Zalando rules without an event", async () => {
+test("zero-candidate imports have no Zalando recommendation without an event", async () => {
   reset();
   watchedHistoricalLowSetup(false);
   // Watched history 500 → 500: remaining at the low is not an event.
@@ -533,7 +507,8 @@ test("zero-candidate imports fall back to the interim Zalando rules without an e
 
   assert.equal(response.status, 200);
   assert.equal(persistedQueries.some((query) => query.text.includes("p.external_url")), false);
-  assert.match(slackMessages[0]!, /Zalando recommendation:\nOther shoe/);
+  assert.equal(slackMessages.length, 1);
+  assert.doesNotMatch(slackMessages[0]!, /Zalando recommendation:/);
 });
 
 test("imports with evaluation candidates record watched historical-low events with the run", async () => {
@@ -549,7 +524,7 @@ test("imports with evaluation candidates record watched historical-low events wi
   assert.deepEqual(importContext.watchedHistoricalLows, [{ productId: "5", dropPercent: 16.6667 }]);
 });
 
-test("a failed watched historical-low detection degrades to the Zalando fallback instead of failing the import", async () => {
+test("a failed watched historical-low detection degrades to no event instead of failing the import", async () => {
   const warn = mock.method(console, "warn", () => {});
 
   try {
@@ -562,7 +537,7 @@ test("a failed watched historical-low detection degrades to the Zalando fallback
     assert.equal(zeroCandidateResponse.status, 200);
     assert.equal(evaluationRunsCreated, 0);
     assert.equal(slackMessages.length, 1);
-    assert.match(slackMessages[0]!, /Zalando recommendation:\nOther shoe/);
+    assert.doesNotMatch(slackMessages[0]!, /Zalando recommendation:/);
 
     reset();
     watchedHistoricalLowSetup(true);

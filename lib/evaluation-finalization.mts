@@ -8,9 +8,8 @@ import {
 } from "./evaluation-runs.mts";
 import {
   formatImportSlackMessage,
-  selectTopRecommendation,
   selectVintedRecommendation,
-  zalandoSource,
+  selectZalandoFallbackRecommendation,
   type ImportRecommendation,
   type ImportSummary,
   type PartialScanWarning,
@@ -70,12 +69,12 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
   try {
     const [rankingSettings] = await sql`SELECT ranking FROM application_settings WHERE id = 1`;
     const preferenceWeightPercent = parseRankingSettings(rankingSettings?.ranking)?.preferenceWeightPercent ?? defaultRankingSettings.preferenceWeightPercent;
-    // Watched historical-low events were recorded at import time (#59). The
-    // Zalando fallback keeps the pre-#58 highest-Overall rule until #60 lands.
+    // Watched historical-low events were recorded at import time (#59); only
+    // when none is recommended does the Zalando fallback apply (#60).
     const watchedHistoricalLowCandidates = await loadWatchedHistoricalLowCandidates(sql, parseWatchedHistoricalLows(metadata?.watchedHistoricalLows));
     const sourceRecommendations = {
       zalando: selectWatchedHistoricalLowRecommendation(watchedHistoricalLowCandidates, preferenceWeightPercent) ??
-        selectTopRecommendation(recommendations.filter((item) => item.source === zalandoSource), preferenceWeightPercent),
+        selectZalandoFallbackRecommendation(recommendations, preferenceWeightPercent),
       vinted: selectVintedRecommendation(recommendations, preferenceWeightPercent),
     };
     const result = await postSlackMessage(formatImportSlackMessage(importSummary, sourceRecommendations, warnings), claim.clientMessageId);

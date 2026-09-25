@@ -1,9 +1,9 @@
 # DealRadar Recommendation Policy
 
 This document defines which products DealRadar surfaces as recommendations
-after an import, per source. It is the target policy from #55. Parts of it are
-not yet implemented; see [Current production paths](#current-production-paths)
-and [Implementation status](#implementation-status).
+after an import, per source. It is the policy from #55, implemented since
+#60; see [Current production paths](#current-production-paths) and
+[Implementation status](#implementation-status).
 
 Terms (Preference score, Deal score, Overall score, Watch, Hide, Like,
 Not for me, Recommendation) are defined in `docs/ubiquitous-language.md`.
@@ -169,13 +169,11 @@ tie-break.
 
 ## Current production paths
 
-As of #58, production implements the Vinted recommendation. As of #59, the
-Zalando recommendation implements step 1 (watched historical-low event); the
-Zalando fallback (step 2) still uses the pre-#58 rules, restricted to Zalando
-products, until #60 lands. Every import posts one Slack message with up to two
-entries, "Zalando recommendation" followed by "Vinted recommendation"; a
-source without a recommendation is omitted. Products whose source is neither
-Zalando nor Vinted are never recommended.
+As of #60, production implements this policy for both sources. Every import
+posts one Slack message with up to two entries, "Zalando recommendation"
+followed by "Vinted recommendation"; a source without a recommendation is
+omitted. Products whose source is neither Zalando nor Vinted are never
+recommended.
 
 **Vinted** — `selectVintedRecommendation` (`lib/import-notification.mts`),
 called from `lib/evaluation-finalization.mts` once the durable run is
@@ -190,38 +188,15 @@ Zalando products, detects the events. `selectWatchedHistoricalLowRecommendation`
 implements [Zalando recommendation](#zalando-recommendation) step 1 as
 specified. It runs in the import route when there are no evaluation
 candidates, and otherwise in `lib/evaluation-finalization.mts` from the events
-recorded with the run. Only when it selects nothing does the interim fallback
-apply.
+recorded with the run.
 
-**Zalando fallback (interim)** — two selection paths:
-
-1. **No evaluation candidates in the import** —
-   `selectSlackHighlight` (`lib/slack-highlight.mts`), called from
-   `app/api/import-deals/route.ts` with only the import's Zalando products.
-   First match wins:
-   1. visible Watched existing product with a same-currency price drop ≥ 5%;
-   2. visible Liked existing product with a price drop ≥ 10%;
-   3. any other visible existing product with a price drop ≥ 20%;
-   4. visible new product with unrounded Overall ≥ 7. In practice this rule
-      does not fire: this path only runs when nothing is evaluated, and a
-      product inserted by this import has no stored evaluation yet.
-
-   Price-drop ties: larger drop → higher Overall (evaluated before
-   unevaluated) → product id.
-
-   The price drop (`priceDropPercent`, `lib/import-persistence.mts`) compares
-   the imported price with the previous values on the `products` row, not
-   with snapshots and not with the historical minimum. It uses the source pair
-   (`source_current_price` / `source_currency`) when the imported product has
-   a source price, otherwise the normalized pair, and requires equal known
-   currencies.
-2. **Import with evaluation candidates** — `selectTopRecommendation`
-   (`lib/import-notification.mts`), called from
-   `lib/evaluation-finalization.mts` with only the run's Zalando evaluations:
-   highest **rounded** Overall among visible evaluated products, no minimum
-   threshold, no watch or price-drop logic. Equal rounded Overall keeps the
-   first product in input order. Normalized-price products are preferred over
-   source-price-only products.
+**Zalando step 2 (fallback)** — `selectZalandoFallbackRecommendation`
+(`lib/import-notification.mts`), called from `lib/evaluation-finalization.mts`
+over the run's completed evaluations only when step 1 selects nothing. It
+implements [Zalando recommendation](#zalando-recommendation) step 2 as
+specified, with the same Overall-based selection as Vinted. An import with no
+evaluation candidates has no Zalando fallback recommendation, so its only
+possible Zalando recommendation is a watched historical-low event.
 
 ## Implementation status
 
@@ -234,6 +209,7 @@ apply.
 | 5 | #61 | Reassess Like / Not for me (investigation) |
 
 #58 changed the Slack message from one highlight to up to two (one per
-source). #59 added the Zalando watched historical-low step. Until #60 lands,
-the Zalando fallback keeps the pre-#58 selection rules, restricted to Zalando
-products.
+source). #59 added the Zalando watched historical-low step. #60 replaced the
+interim Zalando rules (the Watched/Liked/generic price-drop tiers for imports
+without evaluation candidates, and the highest rounded Overall without a
+threshold for imports with them) with the Zalando fallback.

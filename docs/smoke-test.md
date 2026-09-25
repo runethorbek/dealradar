@@ -357,15 +357,14 @@ Check the non-production Slack channel.
 
 Expected observable result: one new message from the finalization step
 (`finalizeEvaluationRun` → `formatImportSlackMessage`), with the import
-summary showing `1 evaluated`. If the evaluated product is from Zalando, the
-message has a "Zalando recommendation" referencing it
-(`selectTopRecommendation`), unless a visible Watched Zalando product had a
+summary showing `1 evaluated`. The evaluated product appears as the
+"Zalando recommendation" (`selectZalandoFallbackRecommendation`) or the
+"Vinted recommendation" (`selectVintedRecommendation`) for its source only
+when its unrounded Overall score is at least 7
+(`docs/recommendation-policy.md`); a message without a recommendation is then
+correct, not a failure. For Zalando, a visible Watched Zalando product with a
 watched historical-low event in this import (recorded in
-`evaluation_runs.watched_historical_lows`), which takes precedence. If it is
-from Vinted, it has a "Vinted
-recommendation" only when its unrounded Overall score is at least 7
-(`selectVintedRecommendation`, `docs/recommendation-policy.md`); a message
-without a recommendation is then correct, not a failure.
+`evaluation_runs.watched_historical_lows`) takes precedence.
 
 ## Real vs mocked/fixture-backed boundaries
 
