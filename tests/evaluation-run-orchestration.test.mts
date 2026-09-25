@@ -50,6 +50,7 @@ test("the Vercel orchestration entry point delegates durable state creation to t
     "abc123",
     JSON.stringify({ ref: "abc123", productsProcessed: 0, productsInserted: 0, productsUpdated: 0, snapshotsInserted: 0, productsEvaluated: 0 }),
     "[]",
+    "[]",
     ["42"],
   ]);
   assert.doesNotMatch(query, /gemini|slack/i);

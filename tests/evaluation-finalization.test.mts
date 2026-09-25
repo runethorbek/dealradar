@@ -86,6 +86,47 @@ test("selects one recommendation per source from the run's completed evaluations
   assert.match(vintedOnly, /Vinted recommendation:\nProduct 22/);
 });
 
+test("a watched historical-low event recorded at import takes Zalando priority at finalization", async () => {
+  const run = async (watchedHistoricalLows: unknown, eventProduct: Record<string, unknown>) => {
+    const messages: string[] = [];
+    let eventQueryValues: unknown[] | null = null;
+    const sql: EvaluationRunSql = async (strings, ...values) => {
+      const query = strings.join("$parameter");
+      if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
+      if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000011", notificationClaimToken: "claim-11" }];
+      if (query.includes("SET notification_sent")) return [{ id: "7" }];
+      if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [], watchedHistoricalLows }];
+      if (query.includes("LEFT JOIN product_evaluations")) { eventQueryValues = values; return [eventProduct]; }
+      if (query.includes("JOIN product_evaluations")) return [
+        { productId: "30", externalUrl: "https://example.com/30", title: "Evaluated Zalando", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 10, dealScore: 10 },
+        { productId: "22", externalUrl: "https://example.com/22", title: "Evaluated Vinted", source: "vinted.com", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 9 },
+      ];
+      if (query.includes("FROM application_settings")) return [{ ranking: null }];
+      throw new Error(query);
+    };
+    await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
+    return { message: messages[0]!, eventQueryValues };
+  };
+  const watchedProduct = {
+    productId: "5", externalUrl: "https://example.com/5", title: "Watched Zalando", source: "zalando.dk", brand: null,
+    currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null,
+    hidden: false, watched: true, preferenceScore: null, dealScore: null,
+  };
+
+  const withEvent = await run([{ productId: "5", dropPercent: 12.5 }], watchedProduct);
+  assert.deepEqual(withEvent.eventQueryValues, [["5"]]);
+  assert.match(withEvent.message, /Zalando recommendation:\nWatched Zalando\n500\.00 DKK[^\n]*\n\nVinted recommendation:\nEvaluated Vinted/);
+
+  // Hidden after the import: the event no longer qualifies and the interim fallback applies.
+  const hiddenSinceImport = await run([{ productId: "5", dropPercent: 12.5 }], { ...watchedProduct, hidden: true });
+  assert.match(hiddenSinceImport.message, /Zalando recommendation:\nEvaluated Zalando/);
+
+  // Runs created before migration 026 or without events skip the event query.
+  const withoutEvents = await run(undefined, watchedProduct);
+  assert.equal(withoutEvents.eventQueryValues, null);
+  assert.match(withoutEvents.message, /Zalando recommendation:\nEvaluated Zalando/);
+});
+
 test("a ranking-settings read failure after the claim is acquired releases the claim through the normal error path", async () => {
   let claimed = false;
   let notificationSent = false;

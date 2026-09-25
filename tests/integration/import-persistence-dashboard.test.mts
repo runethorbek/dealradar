@@ -11,6 +11,7 @@ import {
   type NormalizedProduct,
 } from "@/lib/import-persistence.mts";
 import { getLatestDashboardProducts, type DashboardSql } from "@/lib/dashboard-product-query.mts";
+import { findWatchedHistoricalLows, loadWatchedHistoricalLowCandidates } from "@/lib/watched-historical-low.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
@@ -143,4 +144,48 @@ test("persists a synthetic import through real persistence SQL and reads it back
   assert.equal(productC?.currency, "DKK");
   assert.equal(productC?.discountPercent, "75.00");
   assert.equal(productC?.hidden, false);
+});
+
+test("detects a watched historical-low event from real snapshot history", async () => {
+  const externalUrl = "https://www.zalando.dk/watched-product";
+  const observe = async (currentPrice: number, observedAt: string, currency: string | null = "DKK") => {
+    const [result] = await persistImportedProducts(importSql, [
+      product({ externalUrl, title: "Watched product", currentPrice, currency, observedAt }),
+    ]);
+    return result!;
+  };
+  const eventsFor = (snapshotId: string | null) =>
+    findWatchedHistoricalLows(sql as never, snapshotId ? [snapshotId] : []);
+
+  const first = await observe(500, "2026-01-01T00:00:00.000Z");
+  await sql`UPDATE products SET watched = TRUE WHERE id = ${first.productId}`;
+  assert.deepEqual(await eventsFor(first.snapshotId), [], "first observation");
+
+  await observe(600, "2026-01-02T00:00:00.000Z");
+  const returningLow = await observe(500, "2026-01-03T00:00:00.000Z");
+  assert.deepEqual(await eventsFor(returningLow.snapshotId), [
+    { productId: first.productId, dropPercent: 16.6667 },
+  ]);
+  const [candidate] = await loadWatchedHistoricalLowCandidates(sql as never, await eventsFor(returningLow.snapshotId));
+  assert.equal(candidate?.title, "Watched product");
+  assert.equal(candidate?.watched, true);
+  assert.equal(candidate?.currentPrice, "500.00");
+  assert.equal(candidate?.preferenceScore, null, "no stored evaluation is required");
+
+  const reimport = await observe(500, "2026-01-03T00:00:00.000Z");
+  assert.equal(reimport.snapshotId, null, "re-importing an existing observation inserts nothing");
+
+  const unchanged = await observe(500, "2026-01-04T00:00:00.000Z");
+  assert.deepEqual(await eventsFor(unchanged.snapshotId), [], "remaining at the low");
+
+  const olderRef = await observe(400, "2025-12-31T00:00:00.000Z");
+  assert.ok(olderRef.snapshotId);
+  assert.deepEqual(await eventsFor(olderRef.snapshotId), [], "inserted observation is not the latest");
+
+  const otherCurrency = await observe(300, "2026-01-05T00:00:00.000Z", "EUR");
+  assert.deepEqual(await eventsFor(otherCurrency.snapshotId), [], "no same-currency history");
+
+  await sql`UPDATE products SET hidden = TRUE WHERE id = ${first.productId}`;
+  const hiddenLow = await observe(100, "2026-01-06T00:00:00.000Z");
+  assert.deepEqual(await eventsFor(hiddenLow.snapshotId), [], "hidden products are excluded");
 });

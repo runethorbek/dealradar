@@ -16,6 +16,11 @@ import {
   zalandoSource,
 } from "@/lib/import-notification.mts";
 import { selectSlackHighlight } from "@/lib/slack-highlight.mts";
+import {
+  findWatchedHistoricalLows,
+  loadWatchedHistoricalLowCandidates,
+  selectWatchedHistoricalLowRecommendation,
+} from "@/lib/watched-historical-low.mts";
 import { postSlackMessage } from "@/lib/slack";
 import { createEvaluationRun } from "@/lib/evaluation-runs.mts";
 import { resumePendingEvaluationRunWorkflows, startEvaluationRunWorkflow } from "@/workflows/evaluation-run-orchestration";
@@ -379,6 +384,21 @@ export async function POST(request: Request) {
     const snapshotsInserted = importResults.filter(
       (result) => result.snapshotId,
     ).length;
+    // Watched historical-low events depend on the snapshots inserted by this
+    // import, so they are detected now and recorded with any evaluation run.
+    // Products are already persisted, so a detection failure only degrades the
+    // Zalando recommendation to its fallback instead of failing the import.
+    let watchedHistoricalLows: Awaited<ReturnType<typeof findWatchedHistoricalLows>> = [];
+    try {
+      watchedHistoricalLows = await findWatchedHistoricalLows(
+        sql,
+        importResults.flatMap((result) =>
+          result.source === zalandoSource && result.snapshotId ? [result.snapshotId] : [],
+        ),
+      );
+    } catch {
+      console.warn("DealRadar watched historical-low detection failed.");
+    }
     const evaluationMetrics = {
       candidatesSelected: evaluationCandidates.length,
       requestsAttempted: 0,
@@ -400,7 +420,7 @@ export async function POST(request: Request) {
       const evaluationRun = await createEvaluationRun(sql, {
         importRef: ref,
         candidateProductIds: evaluationCandidates.map((candidate) => candidate.productId),
-        importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings },
+        importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings, watchedHistoricalLows },
       });
       evaluationRunId = evaluationRun.id;
       try {
@@ -449,10 +469,17 @@ export async function POST(request: Request) {
         },
       ]),
     );
-    // Zalando keeps the pre-#58 highlight rules until #59/#60 land. Vinted is
+    // A watched historical-low event takes Zalando priority (#59); otherwise
+    // Zalando keeps the pre-#58 highlight rules until #60 lands. Vinted is
     // only recommended from products evaluated in this import, so an import
     // with no evaluation candidates has no Vinted recommendation.
-    const zalandoHighlight = evaluationCandidates.length === 0 ? selectSlackHighlight(
+    const watchedHistoricalLowHighlight = evaluationCandidates.length === 0
+      ? selectWatchedHistoricalLowRecommendation(
+          await loadWatchedHistoricalLowCandidates(sql, watchedHistoricalLows),
+          preferenceWeightPercent,
+        )
+      : null;
+    const zalandoHighlight = evaluationCandidates.length === 0 ? watchedHistoricalLowHighlight ?? selectSlackHighlight(
       importResults.flatMap((result) => {
         const state = highlightStateByProductId.get(result.productId);
 

@@ -95,8 +95,28 @@ test("creates a pending run with ordered candidate membership", async () => {
     "abc123",
     JSON.stringify({ ref: "abc123", productsProcessed: 0, productsInserted: 0, productsUpdated: 0, snapshotsInserted: 0, productsEvaluated: 0 }),
     "[]",
+    "[]",
     ["42", "9"],
   ]);
+});
+
+test("records the import's watched historical-low events with the run", async () => {
+  let values: unknown[] = [];
+  const sql: EvaluationRunSql = async (strings, ...queryValues) => {
+    values = queryValues;
+    return [runRow];
+  };
+
+  await createEvaluationRun(sql, {
+    importRef: "abc123",
+    candidateProductIds: ["42"],
+    importContext: {
+      productsProcessed: 1, productsInserted: 0, productsUpdated: 1, snapshotsInserted: 1, scanWarnings: [],
+      watchedHistoricalLows: [{ productId: "5", dropPercent: 12.5 }],
+    },
+  });
+
+  assert.equal(values[3], JSON.stringify([{ productId: "5", dropPercent: 12.5 }]));
 });
 
 test("creates a run from the INSERT CTEs' own RETURNING output, guarding against a base-table re-read", async () => {
