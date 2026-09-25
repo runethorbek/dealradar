@@ -411,6 +411,31 @@ test("does not select a recommendation without a complete price and currency", (
   assert.equal(selectTopRecommendation([incomplete]), null);
 });
 
+// Characterization of current production behavior (#57). These describe what
+// selectTopRecommendation does today, not the target policy in
+// docs/recommendation-policy.md; slices #58-#60 are expected to change them.
+test("current behavior: equal rounded Overall keeps the first product in input order", () => {
+  // 60/40: 8/7 -> 7.6 and 8/8 -> 8.0 both round to 8.
+  const lowerUnrounded = { ...recommendations[0], productId: "b", preferenceScore: 8, dealScore: 7 };
+  const higherUnrounded = { ...recommendations[0], productId: "a", preferenceScore: 8, dealScore: 8 };
+
+  assert.equal(selectTopRecommendation([lowerUnrounded, higherUnrounded])?.productId, "b");
+  assert.equal(selectTopRecommendation([higherUnrounded, lowerUnrounded])?.productId, "a");
+});
+
+test("current behavior: there is no minimum Overall score", () => {
+  const lowScore = { ...recommendations[0], productId: "low", preferenceScore: 1, dealScore: 1 };
+
+  assert.equal(selectTopRecommendation([lowScore])?.productId, "low");
+});
+
+test("current behavior: Vinted and Zalando compete for a single recommendation", () => {
+  const vinted = { ...recommendations[0], productId: "vinted", source: "vinted.com", preferenceScore: 9, dealScore: 9 };
+  const zalando = { ...recommendations[0], productId: "zalando", source: "zalando.dk", preferenceScore: 7, dealScore: 7 };
+
+  assert.equal(selectTopRecommendation([zalando, vinted])?.productId, "vinted");
+});
+
 test("formats a valid summary without a recommendation or visible Git ref", () => {
   assert.equal(
     formatImportSlackMessage(summary, null),

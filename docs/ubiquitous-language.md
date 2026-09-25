@@ -80,11 +80,20 @@ The Watchlist includes both visible and hidden watched products. Hidden
 products remain clearly identified as Hidden there; Watch does not change
 their visibility.
 
-Watch records persistent explicit interest. For Slack import highlights only,
-a visible Watched product that existed before the import and has a valid
-same-currency price drop of at least 5% receives first selection priority.
-This does not change dashboard ranking, visibility, feedback, evaluation input,
-or the absence of target-price alerts.
+Watch records persistent explicit interest. In the recommendation policy
+(`docs/recommendation-policy.md`), a visible Watched Zalando product with a
+**watched historical-low event** in the current import receives first
+Zalando recommendation priority. A watched historical-low event is a price
+transition: the new same-currency observation is strictly lower than the
+previous observation and at or below the lowest earlier same-currency
+observation. Remaining at the same low price is not a new event. Watch gives no
+recommendation priority for Vinted. This does not change dashboard ranking,
+visibility, feedback, evaluation input, or the absence of target-price alerts.
+
+Current production still uses the earlier rule until #59 is implemented: for
+Slack import highlights in imports with no evaluation candidates, a visible
+Watched product that existed before the import and has a valid same-currency
+price drop of at least 5% receives first selection priority.
 
 ## Preference score
 
@@ -150,14 +159,35 @@ Overall score is a ranking mechanism, not an independent AI judgment.
 ## Recommendation
 
 A product surfaced because DealRadar considers it sufficiently relevant based
-on its current evaluation and ranking.
+on its current evaluation and ranking, or because a Watched product reached a
+watched historical-low event.
+
+Recommendations are per source: an import has at most one Vinted
+recommendation and at most one Zalando recommendation, and the sources are
+never compared with each other. Hidden products are never recommended.
+Like / Not for me have no direct recommendation priority; they only inform
+Gemini's Preference score as secondary examples. The full rules are in
+`docs/recommendation-policy.md`.
 
 A recommendation does not imply an instruction to purchase.
+
+Current production does not yet follow the per-source rules (#58-#60): each
+import still produces at most one recommendation across both sources, and
+Liked price drops still receive selection priority when an import has no
+evaluation candidates. See "Current production paths" in
+`docs/recommendation-policy.md`.
 
 ## New recommendation
 
 A newly imported or materially changed product that has been evaluated during
-the current import and is worth surfacing to the user.
+the current import, is visible, and has an Overall score of at least 7. It is
+the candidate pool for the Vinted recommendation and the Zalando fallback
+recommendation. Products evaluated in earlier imports are not new
+recommendations again.
+
+Current production does not yet apply the minimum Overall score when an
+import has evaluation candidates: the highest-ranked visible evaluated
+product is selected regardless of score, until #58 and #60 are implemented.
 
 ## Price change
 
