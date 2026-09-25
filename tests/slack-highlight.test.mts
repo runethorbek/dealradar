@@ -170,6 +170,48 @@ test("a configured preference weight can flip new-candidate ranking", () => {
   assert.equal(selectSlackHighlight(tradeoffCandidates, 20)?.productId, "deal-heavy");
 });
 
+// Characterization of current production behavior (#57). These describe what
+// selectSlackHighlight does today, not the target policy in
+// docs/recommendation-policy.md; slices #58-#60 are expected to change them.
+test("current behavior: Vinted and Zalando compete for a single highlight", () => {
+  const vinted = candidate("vinted", { source: "vinted.com", watched: true, priceDropPercent: "12" });
+  const zalando = candidate("zalando", { source: "zalando.dk", watched: true, priceDropPercent: "8" });
+
+  assert.equal(selectSlackHighlight([zalando, vinted])?.productId, "vinted");
+  assert.equal(
+    selectSlackHighlight([{ ...zalando, priceDropPercent: "15" }, vinted])?.productId,
+    "zalando",
+  );
+});
+
+test("current behavior: a Liked price drop outranks a larger generic price drop and a high-scoring new product", () => {
+  assert.equal(
+    selectSlackHighlight([
+      candidate("new", { inserted: true, preferenceScore: 10, dealScore: 10 }),
+      candidate("generic", { priceDropPercent: "50" }),
+      candidate("liked", { feedback: "like", priceDropPercent: "10" }),
+    ])?.productId,
+    "liked",
+  );
+});
+
+test("current behavior: Not for me products are not excluded from the generic price-drop rule", () => {
+  assert.equal(
+    selectSlackHighlight([candidate("not-for-me", { feedback: "dislike", priceDropPercent: "20" })])?.productId,
+    "not-for-me",
+  );
+});
+
+test("current behavior: equal new-product Overall scores fall back to product id", () => {
+  assert.equal(
+    selectSlackHighlight([
+      candidate("b", { inserted: true, preferenceScore: 8, dealScore: 8 }),
+      candidate("a", { inserted: true, preferenceScore: 8, dealScore: 8 }),
+    ])?.productId,
+    "a",
+  );
+});
+
 test("hidden products, price increases, and missing valid price drops never qualify", () => {
   assert.equal(
     selectSlackHighlight([

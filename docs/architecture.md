@@ -248,6 +248,9 @@ This keeps:
 
 centralized in DealRadar.
 
+Recommendation selection rules, per source, are defined in
+`docs/recommendation-policy.md`.
+
 A Slack delivery failure should not cause an otherwise successful import to fail.
 
 ## Partial scan failures
