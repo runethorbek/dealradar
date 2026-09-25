@@ -9,8 +9,11 @@ import {
   formatImportSlackMessage,
   parsePartialScanWarning,
   selectTopRecommendation,
+  selectVintedRecommendation,
   type ImportRecommendation,
 } from "../lib/import-notification.mts";
+
+const noRecommendations = { zalando: null, vinted: null };
 
 const summary = {
   ref: "main",
@@ -411,9 +414,8 @@ test("does not select a recommendation without a complete price and currency", (
   assert.equal(selectTopRecommendation([incomplete]), null);
 });
 
-// Characterization of current production behavior (#57). These describe what
-// selectTopRecommendation does today, not the target policy in
-// docs/recommendation-policy.md; slices #58-#60 are expected to change them.
+// Characterization of selectTopRecommendation (#57). Since #58 production uses
+// it only for the interim Zalando recommendation; #60 is expected to replace it.
 test("current behavior: equal rounded Overall keeps the first product in input order", () => {
   // 60/40: 8/7 -> 7.6 and 8/8 -> 8.0 both round to 8.
   const lowerUnrounded = { ...recommendations[0], productId: "b", preferenceScore: 8, dealScore: 7 };
@@ -429,16 +431,124 @@ test("current behavior: there is no minimum Overall score", () => {
   assert.equal(selectTopRecommendation([lowScore])?.productId, "low");
 });
 
-test("current behavior: Vinted and Zalando compete for a single recommendation", () => {
-  const vinted = { ...recommendations[0], productId: "vinted", source: "vinted.com", preferenceScore: 9, dealScore: 9 };
-  const zalando = { ...recommendations[0], productId: "zalando", source: "zalando.dk", preferenceScore: 7, dealScore: 7 };
+function vintedRecommendation(
+  productId: string,
+  overrides: Partial<ImportRecommendation> = {},
+): ImportRecommendation {
+  return {
+    ...recommendations[0],
+    productId,
+    source: "vinted.com",
+    preferenceScore: 8,
+    dealScore: 8,
+    ...overrides,
+  };
+}
 
-  assert.equal(selectTopRecommendation([zalando, vinted])?.productId, "vinted");
+test("Vinted recommendation selects the highest unrounded Overall score", () => {
+  // 60/40: 8/7 -> 7.6 and 8/8 -> 8.0 both round to 8.
+  assert.equal(
+    selectVintedRecommendation([
+      vintedRecommendation("1", { preferenceScore: 8, dealScore: 7 }),
+      vintedRecommendation("2", { preferenceScore: 8, dealScore: 8 }),
+    ])?.productId,
+    "2",
+  );
+});
+
+test("Vinted recommendation requires an unrounded Overall score of at least 7", () => {
+  // 60/40: 7/7 -> 7.0 qualifies; 8/5 -> 6.8 would round to 7 but does not.
+  assert.equal(
+    selectVintedRecommendation([vintedRecommendation("1", { preferenceScore: 7, dealScore: 7 })])?.productId,
+    "1",
+  );
+  assert.equal(
+    selectVintedRecommendation([vintedRecommendation("1", { preferenceScore: 8, dealScore: 5 })]),
+    null,
+  );
+});
+
+test("Vinted recommendation uses the configured preference weight for Overall and the threshold", () => {
+  const candidates = [
+    vintedRecommendation("preference-heavy", { preferenceScore: 9, dealScore: 5 }),
+    vintedRecommendation("deal-heavy", { preferenceScore: 5, dealScore: 9 }),
+  ];
+
+  assert.equal(selectVintedRecommendation(candidates)?.productId, "preference-heavy");
+  assert.equal(selectVintedRecommendation(candidates, 20)?.productId, "deal-heavy");
+  assert.equal(selectVintedRecommendation(candidates, 50)?.productId, "deal-heavy");
+});
+
+test("Vinted recommendation breaks equal Overall by higher Deal score, then ascending product id", () => {
+  // 50/50: 9/7 and 7/9 are both 8.0.
+  assert.equal(
+    selectVintedRecommendation([
+      vintedRecommendation("1", { preferenceScore: 9, dealScore: 7 }),
+      vintedRecommendation("2", { preferenceScore: 7, dealScore: 9 }),
+    ], 50)?.productId,
+    "2",
+  );
+  // Ids are BIGINTs as text: 9 sorts before 10.
+  assert.equal(
+    selectVintedRecommendation([vintedRecommendation("10"), vintedRecommendation("9")])?.productId,
+    "9",
+  );
+  assert.equal(
+    selectVintedRecommendation([vintedRecommendation("9"), vintedRecommendation("10")])?.productId,
+    "9",
+  );
+});
+
+test("Vinted recommendation excludes hidden products and non-Vinted sources", () => {
+  assert.equal(
+    selectVintedRecommendation([
+      vintedRecommendation("hidden", { hidden: true, preferenceScore: 10, dealScore: 10 }),
+      vintedRecommendation("zalando", { source: "zalando.dk", preferenceScore: 10, dealScore: 10 }),
+      vintedRecommendation("unknown-source", { source: undefined, preferenceScore: 10, dealScore: 10 }),
+      vintedRecommendation("visible"),
+    ])?.productId,
+    "visible",
+  );
+  assert.equal(
+    selectVintedRecommendation([vintedRecommendation("hidden", { hidden: true })]),
+    null,
+  );
+});
+
+test("Vinted recommendation prefers normalized pricing and falls back to complete source pricing", () => {
+  const sourcePriceOnly = vintedRecommendation("source-priced", {
+    currentPrice: null,
+    currency: null,
+    sourceCurrentPrice: "100.00",
+    sourceCurrency: "USD",
+    preferenceScore: 10,
+    dealScore: 10,
+  });
+  const incomplete = vintedRecommendation("incomplete", { currency: null, preferenceScore: 10, dealScore: 10 });
+
+  assert.equal(
+    selectVintedRecommendation([sourcePriceOnly, incomplete, vintedRecommendation("normalized")])?.productId,
+    "normalized",
+  );
+  assert.equal(selectVintedRecommendation([incomplete, sourcePriceOnly])?.productId, "source-priced");
+  assert.equal(selectVintedRecommendation([incomplete]), null);
+});
+
+test("Vinted recommendation ignores Like / Not for me and Watch state", () => {
+  // ImportRecommendation carries no feedback or watch fields: only Overall,
+  // Deal, and product id decide, so a Liked or Watched listing gains nothing.
+  assert.equal(
+    selectVintedRecommendation([
+      { ...vintedRecommendation("liked", { preferenceScore: 7, dealScore: 7 }), feedback: "like", watched: true } as ImportRecommendation,
+      vintedRecommendation("best", { preferenceScore: 9, dealScore: 9 }),
+    ])?.productId,
+    "best",
+  );
 });
 
 test("formats a valid summary without a recommendation or visible Git ref", () => {
   assert.equal(
-    formatImportSlackMessage(summary, null),
+    formatImportSlackMessage(summary, noRecommendations),
     "DealRadar updated: 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated",
   );
 });
@@ -452,9 +562,9 @@ test("formats a safe recommendation with scores, price, and retailer link", () =
   };
 
   assert.equal(
-    formatImportSlackMessage(summary, recommendation),
+    formatImportSlackMessage(summary, { zalando: recommendation, vinted: null }),
     "DealRadar updated: 541 processed · 138 new · 403 updated · 358 snapshots · 50 evaluated\n\n" +
-      "Top recommendation:\nShoes &lt;Special&gt; &amp; Co.\nPreference 9/10 · Deal 8/10 · 1200.00 DKK&lt;test&gt; · " +
+      "Zalando recommendation:\nShoes &lt;Special&gt; &amp; Co.\nPreference 9/10 · Deal 8/10 · 1200.00 DKK&lt;test&gt; · " +
       "<https://retailer.example/products/deal-two?colour=brown&amp;size=42|View product>",
   );
 });
@@ -462,7 +572,7 @@ test("formats a safe recommendation with scores, price, and retailer link", () =
 test("keeps an unevaluated highlight and Scan warning in the normal Slack message", () => {
   const message = formatImportSlackMessage(
     summary,
-    { ...recommendations[0], preferenceScore: null, dealScore: null },
+    { zalando: { ...recommendations[0], preferenceScore: null, dealScore: null }, vinted: null },
     [
       {
         sourceName: "Zalando",
@@ -474,9 +584,22 @@ test("keeps an unevaluated highlight and Scan warning in the normal Slack messag
     ],
   );
 
-  assert.match(message, /Top recommendation:\nDeal One\n900\.00 DKK/);
+  assert.match(message, /Zalando recommendation:\nDeal One\n900\.00 DKK/);
   assert.doesNotMatch(message, /Preference null|Deal null/);
   assert.match(message, /Scan warnings:/);
+});
+
+test("formats one recommendation per source, Zalando before Vinted", () => {
+  const message = formatImportSlackMessage(summary, {
+    zalando: { ...recommendations[0], title: "Zalando pick" },
+    vinted: { ...recommendations[1], title: "Vinted pick" },
+  });
+
+  assert.match(
+    message,
+    /\n\nZalando recommendation:\nZalando pick\n[^\n]+\n\nVinted recommendation:\nVinted pick\n[^\n]+$/,
+  );
+  assert.doesNotMatch(message, /Top recommendation/);
 });
 
 test("formats preserved source pricing when normalized pricing is unavailable", () => {
@@ -494,7 +617,7 @@ test("formats preserved source pricing when normalized pricing is unavailable", 
   };
 
   assert.match(
-    formatImportSlackMessage(summary, recommendation),
+    formatImportSlackMessage(summary, { zalando: recommendation, vinted: null }),
     /275\.00 USD/,
   );
 });
@@ -520,8 +643,8 @@ test("uses the translated Vinted display title in the Slack recommendation", () 
   };
 
   assert.match(
-    formatImportSlackMessage(summary, recommendation),
-    /Top recommendation:\nRacing Green - marineblå blazer med mærke - Ny med prismærker - S\n/,
+    formatImportSlackMessage(summary, { zalando: null, vinted: recommendation }),
+    /Vinted recommendation:\nRacing Green - marineblå blazer med mærke - Ny med prismærker - S\n/,
   );
 });
 
@@ -546,8 +669,8 @@ test("falls back to the original listing text when no translation is stored", ()
   };
 
   assert.match(
-    formatImportSlackMessage(summary, recommendation),
-    /Top recommendation:\nRacing Green - granatowa marynarka z metką - Ny med prismærker - S\n/,
+    formatImportSlackMessage(summary, { zalando: null, vinted: recommendation }),
+    /Vinted recommendation:\nRacing Green - granatowa marynarka z metką - Ny med prismærker - S\n/,
   );
 });
 
@@ -571,9 +694,9 @@ test("collapses missing Vinted title segments cleanly in Slack and never shows p
     dealScore: 7,
   };
 
-  const message = formatImportSlackMessage(summary, recommendation);
+  const message = formatImportSlackMessage(summary, { zalando: null, vinted: recommendation });
 
-  assert.match(message, /Top recommendation:\ngranatowa marynarka z metką\n/);
+  assert.match(message, /Vinted recommendation:\ngranatowa marynarka z metką\n/);
   assert.doesNotMatch(message.split("\n\n")[1].split("\n")[1], /\bkr\b|\d+[.,]\d+/);
 });
 
@@ -598,8 +721,8 @@ test("keeps Zalando Slack titles unchanged even when other display-title fields 
   };
 
   assert.match(
-    formatImportSlackMessage(summary, recommendation),
-    /Top recommendation:\nZalando raw title\n/,
+    formatImportSlackMessage(summary, { zalando: recommendation, vinted: null }),
+    /Zalando recommendation:\nZalando raw title\n/,
   );
 });
 
@@ -641,7 +764,7 @@ test("renders one partial source with escaped failure details", () => {
   assert.match(
     formatImportSlackMessage(
       summary,
-      null,
+      noRecommendations,
       [warning],
     ),
     /Scan warnings:\n• Scarosso: 5\/6 pages succeeded; 1 failed\n  ◦ Boots &lt;sale&gt; — https:\/\/shop\.example\/search\?q=boots&amp;size=42: HTTP &lt;503&gt; &amp; timeout/,
@@ -659,9 +782,9 @@ test("keeps a recommendation and scan warning in the same message", () => {
   });
 
   assert.ok(warning);
-  const message = formatImportSlackMessage(summary, recommendations[1], [warning]);
+  const message = formatImportSlackMessage(summary, { zalando: recommendations[1], vinted: null }, [warning]);
 
-  assert.match(message, /Top recommendation:\nDeal Two/);
+  assert.match(message, /Zalando recommendation:\nDeal Two/);
   assert.match(message, /Scan warnings:\n• Scarosso: 5\/6 pages succeeded; 1 failed/);
 });
 
@@ -679,7 +802,7 @@ test("keeps bounded failure rendering unchanged", () => {
   });
 
   assert.ok(warning);
-  const message = formatImportSlackMessage(summary, null, [warning]);
+  const message = formatImportSlackMessage(summary, noRecommendations, [warning]);
 
   assert.match(message, /◦ Page 5: timeout/);
   assert.doesNotMatch(message, /◦ Page 6: timeout/);
@@ -711,7 +834,7 @@ test("renders warnings for multiple partial sources", () => {
 
   const message = formatImportSlackMessage(
     summary,
-    null,
+    noRecommendations,
     warnings,
   );
 

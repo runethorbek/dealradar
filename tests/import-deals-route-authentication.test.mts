@@ -382,6 +382,7 @@ function twoProductZeroCandidateSetup() {
 
     return {
       productId: isProductA ? "product-a" : "product-b",
+      source: "zalando.dk",
       externalUrl: isProductA ? productAUrl : productBUrl,
       title: isProductA ? "Product A" : "Product B",
       currentPrice: "1200",
@@ -412,7 +413,7 @@ test("zero-candidate imports use the persisted ranking weight to break a tie bet
 
   assert.equal(response.status, 200);
   assert.equal(slackMessages.length, 1);
-  assert.match(slackMessages[0]!, /Top recommendation:\nProduct B/);
+  assert.match(slackMessages[0]!, /Zalando recommendation:\nProduct B/);
 });
 
 test("zero-candidate imports default to 60/40 weighting when no ranking setting is configured", async () => {
@@ -423,7 +424,27 @@ test("zero-candidate imports default to 60/40 weighting when no ranking setting 
 
   assert.equal(response.status, 200);
   assert.equal(slackMessages.length, 1);
-  assert.match(slackMessages[0]!, /Top recommendation:\nProduct A/);
+  assert.match(slackMessages[0]!, /Zalando recommendation:\nProduct A/);
+});
+
+test("zero-candidate imports never recommend Vinted, even for a Watched price drop", async () => {
+  reset();
+  transactionResultFactory = () => ({
+    productId: "vinted-watched", source: "vinted.com", externalUrl: "https://www.vinted.dk/items/watched", title: "Watched Vinted",
+    currentPrice: "1000", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, inserted: false,
+    snapshotId: "snapshot-vinted", priceChanged: false, priceDropPercent: "30", discountPercent: null,
+  });
+  highlightStateRows = [
+    { productId: "vinted-watched", watched: true, feedback: "like", preferenceScore: 10, dealScore: 10 },
+  ];
+  globalThis.fetch = async (input) => Response.json(validFeed(String(input)));
+
+  const response = await POST(importRequest("Bearer valid-ingest-key"));
+
+  assert.equal(response.status, 200);
+  assert.equal(evaluationRunsCreated, 0);
+  assert.equal(slackMessages.length, 1);
+  assert.doesNotMatch(slackMessages[0]!, /recommendation:/);
 });
 
 test("rejects feed-level contract violations before persistence without live URL checks", async (t) => {

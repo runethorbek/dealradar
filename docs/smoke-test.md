@@ -356,8 +356,13 @@ from the persisted preference/deal scores.
 Check the non-production Slack channel.
 
 Expected observable result: one new message from the finalization step
-(`finalizeEvaluationRun` → `formatImportSlackMessage` /
-`selectTopRecommendation`), referencing the evaluated product.
+(`finalizeEvaluationRun` → `formatImportSlackMessage`), with the import
+summary showing `1 evaluated`. If the evaluated product is from Zalando, the
+message has a "Zalando recommendation" referencing it
+(`selectTopRecommendation`). If it is from Vinted, it has a "Vinted
+recommendation" only when its unrounded Overall score is at least 7
+(`selectVintedRecommendation`, `docs/recommendation-policy.md`); a message
+without a recommendation is then correct, not a failure.
 
 ## Real vs mocked/fixture-backed boundaries
 

@@ -170,20 +170,9 @@ test("a configured preference weight can flip new-candidate ranking", () => {
   assert.equal(selectSlackHighlight(tradeoffCandidates, 20)?.productId, "deal-heavy");
 });
 
-// Characterization of current production behavior (#57). These describe what
-// selectSlackHighlight does today, not the target policy in
-// docs/recommendation-policy.md; slices #58-#60 are expected to change them.
-test("current behavior: Vinted and Zalando compete for a single highlight", () => {
-  const vinted = candidate("vinted", { source: "vinted.com", watched: true, priceDropPercent: "12" });
-  const zalando = candidate("zalando", { source: "zalando.dk", watched: true, priceDropPercent: "8" });
-
-  assert.equal(selectSlackHighlight([zalando, vinted])?.productId, "vinted");
-  assert.equal(
-    selectSlackHighlight([{ ...zalando, priceDropPercent: "15" }, vinted])?.productId,
-    "zalando",
-  );
-});
-
+// Characterization of selectSlackHighlight (#57). Since #58 production passes it
+// only Zalando products (interim Zalando recommendation when nothing is
+// evaluated); #59/#60 are expected to replace these rules.
 test("current behavior: a Liked price drop outranks a larger generic price drop and a high-scoring new product", () => {
   assert.equal(
     selectSlackHighlight([

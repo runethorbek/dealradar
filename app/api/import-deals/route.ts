@@ -13,6 +13,7 @@ import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-sett
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
+  zalandoSource,
 } from "@/lib/import-notification.mts";
 import { selectSlackHighlight } from "@/lib/slack-highlight.mts";
 import { postSlackMessage } from "@/lib/slack";
@@ -448,18 +449,21 @@ export async function POST(request: Request) {
         },
       ]),
     );
-    const slackHighlight = evaluationCandidates.length === 0 ? selectSlackHighlight(
+    // Zalando keeps the pre-#58 highlight rules until #59/#60 land. Vinted is
+    // only recommended from products evaluated in this import, so an import
+    // with no evaluation candidates has no Vinted recommendation.
+    const zalandoHighlight = evaluationCandidates.length === 0 ? selectSlackHighlight(
       importResults.flatMap((result) => {
         const state = highlightStateByProductId.get(result.productId);
 
-        return state ? [{ ...result, ...state }] : [];
+        return state && result.source === zalandoSource ? [{ ...result, ...state }] : [];
       }),
       preferenceWeightPercent,
     ) : null;
     // There is no durable work to finalize when nothing was selected, so retain
     // one useful import notification without creating a stranded empty run.
     if (evaluationCandidates.length === 0) {
-      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, slackHighlight, partialScanWarnings);
+      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, { zalando: zalandoHighlight, vinted: null }, partialScanWarnings);
       try {
         const slackResult = await postSlackMessage(slackMessage);
         if (!slackResult.success) console.warn(`DealRadar Slack notification failed: ${slackResult.error}.`);

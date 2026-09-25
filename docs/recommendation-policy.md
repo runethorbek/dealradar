@@ -162,13 +162,25 @@ the import's observations. That choice belongs to #59.
 
 ## Current production paths
 
-As of #57, production does **not** yet implement this policy. There are two
-selection paths:
+As of #58, production implements the Vinted recommendation. The Zalando
+recommendation still uses the pre-#58 rules, restricted to Zalando products,
+until #59 and #60 land. Every import posts one Slack message with up to two
+entries, "Zalando recommendation" followed by "Vinted recommendation"; a
+source without a recommendation is omitted. Products whose source is neither
+Zalando nor Vinted are never recommended.
+
+**Vinted** — `selectVintedRecommendation` (`lib/import-notification.mts`),
+called from `lib/evaluation-finalization.mts` once the durable run is
+terminal, over the run's completed evaluations. It implements
+[Vinted recommendation](#vinted-recommendation) as specified. An import with
+no evaluation candidates has no Vinted recommendation.
+
+**Zalando (interim)** — two selection paths:
 
 1. **No evaluation candidates in the import** —
    `selectSlackHighlight` (`lib/slack-highlight.mts`), called from
-   `app/api/import-deals/route.ts`. One highlight across both sources, first
-   match wins:
+   `app/api/import-deals/route.ts` with only the import's Zalando products.
+   First match wins:
    1. visible Watched existing product with a same-currency price drop ≥ 5%;
    2. visible Liked existing product with a price drop ≥ 10%;
    3. any other visible existing product with a price drop ≥ 20%;
@@ -187,13 +199,11 @@ selection paths:
    currencies.
 2. **Import with evaluation candidates** — `selectTopRecommendation`
    (`lib/import-notification.mts`), called from
-   `lib/evaluation-finalization.mts` once the durable run is terminal. One
-   recommendation across both sources: highest **rounded** Overall among
-   visible evaluated products, no minimum threshold, no watch or price-drop
-   logic. Equal rounded Overall keeps the first product in input order.
-   Normalized-price products are preferred over source-price-only products.
-
-Both paths post a single Slack message with at most one "Top recommendation".
+   `lib/evaluation-finalization.mts` with only the run's Zalando evaluations:
+   highest **rounded** Overall among visible evaluated products, no minimum
+   threshold, no watch or price-drop logic. Equal rounded Overall keeps the
+   first product in input order. Normalized-price products are preferred over
+   source-price-only products.
 
 ## Implementation status
 
@@ -205,6 +215,6 @@ Both paths post a single Slack message with at most one "Top recommendation".
 | 4 | #60 | Zalando fallback |
 | 5 | #61 | Reassess Like / Not for me (investigation) |
 
-#58 changes the Slack message from one highlight to up to two (one per
-source). Until #59 and #60 land, the Zalando entry keeps today's selection
-rules, restricted to Zalando products.
+#58 changed the Slack message from one highlight to up to two (one per
+source). Until #59 and #60 land, the Zalando entry keeps the pre-#58
+selection rules, restricted to Zalando products.
