@@ -8,8 +8,9 @@ import {
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
-  selectTopRecommendation,
   selectVintedRecommendation,
+  selectZalandoFallbackRecommendation,
+  zalandoSource,
   type ImportRecommendation,
 } from "../lib/import-notification.mts";
 
@@ -51,18 +52,99 @@ const recommendations: ImportRecommendation[] = [
   },
 ];
 
-test("selects the recommendation with the highest rounded overall score", () => {
-  assert.equal(selectTopRecommendation(recommendations)?.productId, "2");
+function zalandoRecommendation(
+  productId: string,
+  overrides: Partial<ImportRecommendation> = {},
+): ImportRecommendation {
+  return {
+    ...recommendations[0],
+    productId,
+    source: zalandoSource,
+    preferenceScore: 8,
+    dealScore: 8,
+    ...overrides,
+  };
+}
+
+test("Zalando fallback selects the highest unrounded Overall score", () => {
+  // 60/40: 8/7 -> 7.6 and 8/8 -> 8.0 both round to 8.
+  assert.equal(
+    selectZalandoFallbackRecommendation([
+      zalandoRecommendation("1", { preferenceScore: 8, dealScore: 7 }),
+      zalandoRecommendation("2", { preferenceScore: 8, dealScore: 8 }),
+    ])?.productId,
+    "2",
+  );
 });
 
-test("a configured preference weight can flip which recommendation is selected", () => {
-  const tradeoffRecommendations: ImportRecommendation[] = [
-    { ...recommendations[0], productId: "preference-heavy", preferenceScore: 9, dealScore: 3 },
-    { ...recommendations[0], productId: "deal-heavy", preferenceScore: 3, dealScore: 9 },
+test("Zalando fallback requires an unrounded Overall score of at least 7", () => {
+  // 60/40: 7/7 -> 7.0 qualifies; 8/5 -> 6.8 would round to 7 but does not.
+  assert.equal(
+    selectZalandoFallbackRecommendation([zalandoRecommendation("1", { preferenceScore: 7, dealScore: 7 })])?.productId,
+    "1",
+  );
+  assert.equal(
+    selectZalandoFallbackRecommendation([zalandoRecommendation("1", { preferenceScore: 8, dealScore: 5 })]),
+    null,
+  );
+});
+
+test("Zalando fallback uses the configured preference weight for Overall and the threshold", () => {
+  const candidates = [
+    zalandoRecommendation("preference-heavy", { preferenceScore: 9, dealScore: 5 }),
+    zalandoRecommendation("deal-heavy", { preferenceScore: 5, dealScore: 9 }),
   ];
 
-  assert.equal(selectTopRecommendation(tradeoffRecommendations)?.productId, "preference-heavy");
-  assert.equal(selectTopRecommendation(tradeoffRecommendations, 20)?.productId, "deal-heavy");
+  assert.equal(selectZalandoFallbackRecommendation(candidates)?.productId, "preference-heavy");
+  assert.equal(selectZalandoFallbackRecommendation(candidates, 20)?.productId, "deal-heavy");
+});
+
+test("Zalando fallback breaks equal Overall by higher Deal score, then ascending product id", () => {
+  // 50/50: 9/7 and 7/9 are both 8.0.
+  assert.equal(
+    selectZalandoFallbackRecommendation([
+      zalandoRecommendation("1", { preferenceScore: 9, dealScore: 7 }),
+      zalandoRecommendation("2", { preferenceScore: 7, dealScore: 9 }),
+    ], 50)?.productId,
+    "2",
+  );
+  // Ids are BIGINTs as text: 9 sorts before 10, regardless of input order.
+  assert.equal(
+    selectZalandoFallbackRecommendation([zalandoRecommendation("10"), zalandoRecommendation("9")])?.productId,
+    "9",
+  );
+  assert.equal(
+    selectZalandoFallbackRecommendation([zalandoRecommendation("9"), zalandoRecommendation("10")])?.productId,
+    "9",
+  );
+});
+
+test("Zalando fallback excludes hidden products and non-Zalando sources", () => {
+  assert.equal(
+    selectZalandoFallbackRecommendation([
+      zalandoRecommendation("hidden", { hidden: true, preferenceScore: 10, dealScore: 10 }),
+      zalandoRecommendation("vinted", { source: "vinted.com", preferenceScore: 10, dealScore: 10 }),
+      zalandoRecommendation("unknown-source", { source: undefined, preferenceScore: 10, dealScore: 10 }),
+      zalandoRecommendation("visible"),
+    ])?.productId,
+    "visible",
+  );
+  assert.equal(
+    selectZalandoFallbackRecommendation([zalandoRecommendation("hidden", { hidden: true })]),
+    null,
+  );
+});
+
+test("Zalando fallback gives Like / Not for me and Watch no direct priority", () => {
+  // ImportRecommendation carries no feedback or watch fields: only Overall,
+  // Deal, and product id decide, so a Liked or Watched product gains nothing.
+  assert.equal(
+    selectZalandoFallbackRecommendation([
+      { ...zalandoRecommendation("liked", { preferenceScore: 7, dealScore: 7 }), feedback: "like", watched: true } as ImportRecommendation,
+      zalandoRecommendation("best", { preferenceScore: 9, dealScore: 9 }),
+    ])?.productId,
+    "best",
+  );
 });
 
 test("evaluates hidden and visible products before selecting a visible recommendation", async () => {
@@ -119,7 +201,10 @@ test("evaluates hidden and visible products before selecting a visible recommend
       { productId: "visible", hidden: false },
     ],
   );
-  assert.equal(selectTopRecommendation(evaluatedProducts)?.productId, "visible");
+  assert.equal(
+    selectZalandoFallbackRecommendation(evaluatedProducts.map((product) => ({ ...product, source: zalandoSource })))?.productId,
+    "visible",
+  );
 });
 
 test("returns no recommendation when every evaluated product is hidden", async () => {
@@ -151,7 +236,10 @@ test("returns no recommendation when every evaluated product is hidden", async (
   );
 
   assert.equal(evaluationCount, 1);
-  assert.equal(selectTopRecommendation(evaluatedProducts), null);
+  assert.equal(
+    selectZalandoFallbackRecommendation(evaluatedProducts.map((product) => ({ ...product, source: zalandoSource }))),
+    null,
+  );
 });
 
 function evaluationCandidate(productId: string) {
@@ -360,8 +448,9 @@ test("retries quota-like HTTP 429 responses", async () => {
   assert.deepEqual(delays, [5_000, 10_000]);
 });
 
-test("prefers complete normalized pricing over a higher-ranked source-price fallback", () => {
+test("Zalando fallback prefers complete normalized pricing over a higher-ranked source-price fallback", () => {
   const sourcePriceOnly: ImportRecommendation = {
+    source: zalandoSource,
     productId: "3",
     externalUrl: "https://retailer.example/products/source-priced",
     title: "Source-priced deal",
@@ -375,13 +464,14 @@ test("prefers complete normalized pricing over a higher-ranked source-price fall
   };
 
   assert.equal(
-    selectTopRecommendation([sourcePriceOnly, recommendations[0]])?.productId,
+    selectZalandoFallbackRecommendation([sourcePriceOnly, zalandoRecommendation("1")])?.productId,
     "1",
   );
 });
 
-test("falls back to complete preserved source pricing", () => {
+test("Zalando fallback falls back to complete preserved source pricing", () => {
   const sourcePriceOnly: ImportRecommendation = {
+    source: zalandoSource,
     productId: "3",
     externalUrl: "https://retailer.example/products/source-priced",
     title: "Source-priced deal",
@@ -394,11 +484,12 @@ test("falls back to complete preserved source pricing", () => {
     dealScore: 7,
   };
 
-  assert.equal(selectTopRecommendation([sourcePriceOnly])?.productId, "3");
+  assert.equal(selectZalandoFallbackRecommendation([sourcePriceOnly])?.productId, "3");
 });
 
-test("does not select a recommendation without a complete price and currency", () => {
+test("Zalando fallback does not select a recommendation without a complete price and currency", () => {
   const incomplete: ImportRecommendation = {
+    source: zalandoSource,
     productId: "4",
     externalUrl: "https://retailer.example/products/incomplete",
     title: "Incomplete deal",
@@ -411,24 +502,7 @@ test("does not select a recommendation without a complete price and currency", (
     dealScore: 10,
   };
 
-  assert.equal(selectTopRecommendation([incomplete]), null);
-});
-
-// Characterization of selectTopRecommendation (#57). Since #58 production uses
-// it only for the interim Zalando recommendation; #60 is expected to replace it.
-test("current behavior: equal rounded Overall keeps the first product in input order", () => {
-  // 60/40: 8/7 -> 7.6 and 8/8 -> 8.0 both round to 8.
-  const lowerUnrounded = { ...recommendations[0], productId: "b", preferenceScore: 8, dealScore: 7 };
-  const higherUnrounded = { ...recommendations[0], productId: "a", preferenceScore: 8, dealScore: 8 };
-
-  assert.equal(selectTopRecommendation([lowerUnrounded, higherUnrounded])?.productId, "b");
-  assert.equal(selectTopRecommendation([higherUnrounded, lowerUnrounded])?.productId, "a");
-});
-
-test("current behavior: there is no minimum Overall score", () => {
-  const lowScore = { ...recommendations[0], productId: "low", preferenceScore: 1, dealScore: 1 };
-
-  assert.equal(selectTopRecommendation([lowScore])?.productId, "low");
+  assert.equal(selectZalandoFallbackRecommendation([incomplete]), null);
 });
 
 function vintedRecommendation(

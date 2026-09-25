@@ -71,19 +71,25 @@ test("selects one recommendation per source from the run's completed evaluations
     product("20", "vinted.com", 10, 10, true),
     product("21", "vinted.com", 8, 7),
     product("22", "vinted.com", 9, 9),
-    product("30", "zalando.dk", 5, 5),
+    product("30", "zalando.dk", 7, 7),
   ]);
   assert.match(both, /\n\nZalando recommendation:\nProduct 30\n[^\n]+\n\nVinted recommendation:\nProduct 22\n/);
 
   // A Vinted listing below Overall 7 (8/5 -> 6.8) gives no Vinted recommendation,
   // and a strong Vinted listing never displaces the Zalando one.
-  const vintedBelowThreshold = await run([product("21", "vinted.com", 8, 5), product("30", "zalando.dk", 5, 5)]);
+  const vintedBelowThreshold = await run([product("21", "vinted.com", 8, 5), product("30", "zalando.dk", 7, 7)]);
   assert.doesNotMatch(vintedBelowThreshold, /Vinted recommendation/);
   assert.match(vintedBelowThreshold, /Zalando recommendation:\nProduct 30/);
 
   const vintedOnly = await run([product("22", "vinted.com", 9, 9)]);
   assert.doesNotMatch(vintedOnly, /Zalando recommendation/);
   assert.match(vintedOnly, /Vinted recommendation:\nProduct 22/);
+
+  // The Zalando fallback (#60) has the same Overall 7 threshold: 8/5 -> 6.8
+  // gives no Zalando recommendation, while 7/7 -> 7.0 above qualifies.
+  const zalandoBelowThreshold = await run([product("30", "zalando.dk", 8, 5), product("22", "vinted.com", 9, 9)]);
+  assert.doesNotMatch(zalandoBelowThreshold, /Zalando recommendation/);
+  assert.match(zalandoBelowThreshold, /Vinted recommendation:\nProduct 22/);
 });
 
 test("a watched historical-low event recorded at import takes Zalando priority at finalization", async () => {

@@ -72,19 +72,6 @@ export function getOverallEvaluationScore(
   return computeOverallScore(preferenceScore, dealScore, preferenceWeightPercent);
 }
 
-function getOverallScore(
-  recommendation: ImportRecommendation,
-  preferenceWeightPercent: number,
-) {
-  return Math.round(
-    getOverallEvaluationScore(
-      recommendation.preferenceScore,
-      recommendation.dealScore,
-      preferenceWeightPercent,
-    ),
-  );
-}
-
 function escapeSlackText(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -233,47 +220,6 @@ function getDisplayPrice(recommendation: ImportSlackHighlight) {
   return null;
 }
 
-function selectHighestRanked(
-  recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number,
-) {
-  return recommendations.reduce<ImportRecommendation | null>((best, item) => {
-    if (
-      !best ||
-      getOverallScore(item, preferenceWeightPercent) >
-        getOverallScore(best, preferenceWeightPercent)
-    ) {
-      return item;
-    }
-
-    return best;
-  }, null);
-}
-
-export function selectTopRecommendation(
-  recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
-) {
-  const visibleRecommendations = recommendations.filter(
-    (item) => !item.hidden,
-  );
-  const normalizedPriceRecommendations = visibleRecommendations.filter(
-    (item) => item.currentPrice !== null && item.currency !== null,
-  );
-
-  if (normalizedPriceRecommendations.length > 0) {
-    return selectHighestRanked(normalizedPriceRecommendations, preferenceWeightPercent);
-  }
-
-  return selectHighestRanked(
-    visibleRecommendations.filter(
-      (item) =>
-        item.sourceCurrentPrice !== null && item.sourceCurrency !== null,
-    ),
-    preferenceWeightPercent,
-  );
-}
-
 function hasNormalizedPrice(item: ImportRecommendation) {
   return item.currentPrice !== null && item.currency !== null;
 }
@@ -292,18 +238,20 @@ export function compareProductIds(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-// Vinted recommendation (docs/recommendation-policy.md): the visible Vinted
-// product evaluated in this import with the highest unrounded Overall score,
-// provided it is at least 7. Ties: higher Deal score, then ascending product id.
-export function selectVintedRecommendation(
+// Overall-based recommendation for one source (docs/recommendation-policy.md):
+// the visible product evaluated in this import with the highest unrounded
+// Overall score, provided it is at least 7. Ties: higher Deal score, then
+// ascending product id.
+function selectOverallRecommendation(
+  source: string,
   recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
+  preferenceWeightPercent: number,
 ) {
   const overallScore = (item: ImportRecommendation) =>
     getOverallEvaluationScore(item.preferenceScore, item.dealScore, preferenceWeightPercent);
   const candidates = recommendations.filter(
     (item) =>
-      item.source === vintedSource &&
+      item.source === source &&
       !item.hidden &&
       overallScore(item) >= minimumRecommendationOverallScore,
   );
@@ -318,6 +266,23 @@ export function selectVintedRecommendation(
       right.dealScore - left.dealScore ||
       compareProductIds(left.productId, right.productId),
   )[0] ?? null;
+}
+
+// Vinted recommendation: Overall-based, with no watched or price-history rules.
+export function selectVintedRecommendation(
+  recommendations: ImportRecommendation[],
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
+) {
+  return selectOverallRecommendation(vintedSource, recommendations, preferenceWeightPercent);
+}
+
+// Zalando fallback (Zalando recommendation step 2): applies only when no
+// watched historical-low event is recommended (step 1).
+export function selectZalandoFallbackRecommendation(
+  recommendations: ImportRecommendation[],
+  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
+) {
+  return selectOverallRecommendation(zalandoSource, recommendations, preferenceWeightPercent);
 }
 
 function formatRecommendation(label: string, recommendation: ImportSlackHighlight) {
