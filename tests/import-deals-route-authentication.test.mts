@@ -418,9 +418,6 @@ test("zero-candidate imports have no Zalando fallback recommendation, even for l
   assert.equal(evaluationRunsCreated, 0);
   assert.equal(slackMessages.length, 1);
   assert.doesNotMatch(slackMessages[0]!, /recommendation:/);
-  // No Like / Watch price-drop state is loaded: the Zalando fallback (#60)
-  // only uses products evaluated in this import.
-  assert.equal(persistedQueries.some((query) => query.text.includes("product_feedback")), false);
 });
 
 test("zero-candidate imports never recommend Vinted, even for a Watched price drop", async () => {

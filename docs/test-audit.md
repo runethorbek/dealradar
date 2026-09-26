@@ -1,5 +1,9 @@
 # DealRadar test coverage and verification audit
 
+> Note: product feedback (Like / Not for me), `POST /api/product-feedback`, and
+> the `product-feedback-*.test.mts` tests were removed in #66. References to
+> them below are historical.
+
 Investigation-only audit produced for issue #48. No production code, tests,
 migrations, workflows, configuration, or generated output were changed while
 producing this report. All findings are based on reading the current test

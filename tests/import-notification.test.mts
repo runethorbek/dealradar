@@ -135,12 +135,12 @@ test("Zalando fallback excludes hidden products and non-Zalando sources", () => 
   );
 });
 
-test("Zalando fallback gives Like / Not for me and Watch no direct priority", () => {
-  // ImportRecommendation carries no feedback or watch fields: only Overall,
-  // Deal, and product id decide, so a Liked or Watched product gains nothing.
+test("Zalando fallback gives Watch no direct priority", () => {
+  // ImportRecommendation carries no watch field: only Overall, Deal, and
+  // product id decide, so a Watched product gains nothing.
   assert.equal(
     selectZalandoFallbackRecommendation([
-      { ...zalandoRecommendation("liked", { preferenceScore: 7, dealScore: 7 }), feedback: "like", watched: true } as ImportRecommendation,
+      { ...zalandoRecommendation("watched", { preferenceScore: 7, dealScore: 7 }), watched: true } as ImportRecommendation,
       zalandoRecommendation("best", { preferenceScore: 9, dealScore: 9 }),
     ])?.productId,
     "best",
@@ -608,12 +608,12 @@ test("Vinted recommendation prefers normalized pricing and falls back to complet
   assert.equal(selectVintedRecommendation([incomplete]), null);
 });
 
-test("Vinted recommendation ignores Like / Not for me and Watch state", () => {
-  // ImportRecommendation carries no feedback or watch fields: only Overall,
-  // Deal, and product id decide, so a Liked or Watched listing gains nothing.
+test("Vinted recommendation ignores Watch state", () => {
+  // ImportRecommendation carries no watch field: only Overall, Deal, and
+  // product id decide, so a Watched listing gains nothing.
   assert.equal(
     selectVintedRecommendation([
-      { ...vintedRecommendation("liked", { preferenceScore: 7, dealScore: 7 }), feedback: "like", watched: true } as ImportRecommendation,
+      { ...vintedRecommendation("watched", { preferenceScore: 7, dealScore: 7 }), watched: true } as ImportRecommendation,
       vintedRecommendation("best", { preferenceScore: 9, dealScore: 9 }),
     ])?.productId,
     "best",

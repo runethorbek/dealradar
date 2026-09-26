@@ -43,7 +43,6 @@ const product: ProductCardProduct = {
   lastSeenAt: "2026-08-30T12:00:00.000Z",
   hidden: false,
   watched: false,
-  feedback: null,
   evaluation: null,
 };
 const authCallbackPath = "/?source=zalando.dk&sort=newest&view=hidden&freshness=7d&product=42";
@@ -86,8 +85,6 @@ async function renderProductCard(
   return container;
 }
 
-const renderFeedbackCard = renderProductCard;
-
 test("renders a compact price history summary when the current price sits above the historical minimum", async () => {
   const container = await renderProductCard(
     Response.json({ success: true }),
@@ -122,17 +119,6 @@ test("renders a single-observation note without implying historical price moveme
   assert.doesNotMatch(container.textContent ?? "", /lowest/i);
 });
 
-async function clickFeedback(container: HTMLElement, label: "Like" | "Not for me") {
-  const button = container.querySelector<HTMLButtonElement>(
-    `button[aria-label="${label}"]`,
-  );
-  assert.ok(button, `Expected ${label} feedback control.`);
-
-  await act(async () => {
-    button.click();
-  });
-}
-
 async function clickVisibility(container: HTMLElement, label: "Hide" | "Unhide") {
   const button = Array.from(container.querySelectorAll("button")).find(
     (candidate) => candidate.textContent === label,
@@ -165,64 +151,6 @@ async function clickEvaluate(container: HTMLElement) {
     button.click();
   });
 }
-
-test("an unauthenticated Like attempt offers sign-in with the preserved dashboard callback", async () => {
-  const container = await renderFeedbackCard(
-    Response.json({ success: false, error: "Unauthorized." }, { status: 401 }),
-  );
-
-  await clickFeedback(container, "Like");
-
-  const signIn = container.querySelector<HTMLAnchorElement>(
-    'a[href^="/api/auth/signin?"]',
-  );
-  assert.ok(signIn);
-  assert.equal(signIn.textContent, "Sign in");
-  assert.equal(
-    signIn.getAttribute("href"),
-    "/api/auth/signin?callbackUrl=%2F%3Fsource%3Dzalando.dk%26sort%3Dnewest%26view%3Dhidden%26freshness%3D7d%26product%3D42",
-  );
-  assert.match(container.textContent ?? "", /to save feedback\./);
-  assert.doesNotMatch(
-    container.textContent ?? "",
-    /Could not save feedback\.|permission to save feedback/,
-  );
-});
-
-test("a non-owner Not for me attempt explains that feedback is not permitted", async () => {
-  const container = await renderFeedbackCard(
-    Response.json({ success: false, error: "Forbidden." }, { status: 403 }),
-  );
-
-  await clickFeedback(container, "Not for me");
-
-  assert.match(
-    container.textContent ?? "",
-    /You don't have permission to save feedback\./,
-  );
-  assert.equal(
-    container.querySelector('a[href^="/api/auth/signin?"]'),
-    null,
-  );
-  assert.doesNotMatch(container.textContent ?? "", /Could not save feedback\./);
-});
-
-test("a successful Like attempt marks Like as selected", async () => {
-  const container = await renderFeedbackCard(
-    Response.json({ success: true, rating: "like" }),
-  );
-
-  await clickFeedback(container, "Like");
-
-  assert.equal(
-    container.querySelector('button[aria-label="Like"]')?.getAttribute("aria-pressed"),
-    "true",
-  );
-  assert.doesNotMatch(
-    container.textContent ?? "",
-    /Could not save feedback\.|Sign in to save feedback\.|permission to save feedback/,
-  );
-});
 
 test("an unauthenticated Hide attempt offers sign-in with the preserved dashboard callback", async () => {
   const container = await renderProductCard(
@@ -308,10 +236,10 @@ test("authorized Hide and Unhide attempts retain their existing behavior", async
   }
 });
 
-test("renders watched state distinctly from feedback and visibility", async () => {
+test("renders watched state distinctly from visibility", async () => {
   const container = await renderProductCard(
     Response.json({ success: true }),
-    { ...product, watched: true, hidden: true, feedback: "dislike" },
+    { ...product, watched: true, hidden: true },
   );
 
   assert.match(container.textContent ?? "", /Watched/);
@@ -321,11 +249,18 @@ test("renders watched state distinctly from feedback and visibility", async () =
     )?.getAttribute("aria-pressed"),
     "true",
   );
-  assert.equal(
-    container.querySelector('button[aria-label="Not for me"]')?.getAttribute("aria-pressed"),
-    "true",
-  );
   assert.match(container.textContent ?? "", /Unhide/);
+});
+
+test("renders no Like or Not for me controls", async () => {
+  const container = await renderProductCard(Response.json({ success: true }));
+  const buttonLabels = Array.from(container.querySelectorAll("button")).map(
+    (button) => button.getAttribute("aria-label") ?? button.textContent,
+  );
+
+  assert.equal(buttonLabels.includes("Like"), false);
+  assert.equal(buttonLabels.includes("Not for me"), false);
+  assert.doesNotMatch(container.textContent ?? "", /Do you like this product\?|feedback/i);
 });
 
 test("an unauthenticated Watch attempt offers sign-in with the dashboard callback", async () => {
@@ -379,7 +314,7 @@ test("authorized Watch and Unwatch persist only Watch state and refresh", async 
     await act(async () => {
       root?.render(
         createElement(ProductCard, {
-          product: { ...product, watched, hidden: true, feedback: "like" },
+          product: { ...product, watched, hidden: true },
           authCallbackPath,
         }),
       );
@@ -390,10 +325,6 @@ test("authorized Watch and Unwatch persist only Watch state and refresh", async 
     assert.equal(requestUrl, "/api/product-watch");
     assert.deepEqual(requestBody, { productId: "42", watched: !watched });
     assert.equal(refreshCalls, 1);
-    assert.equal(
-      container.querySelector('button[aria-label="Like"]')?.getAttribute("aria-pressed"),
-      "true",
-    );
     assert.match(container.textContent ?? "", /Unhide/);
 
     await act(async () => {

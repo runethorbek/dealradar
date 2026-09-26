@@ -1,5 +1,9 @@
 # Hide Products
 
+> Note: Like / Not for me feedback was removed in #66. This specification
+> predates that removal; its references to Like, Not for me, and preference
+> feedback are historical. Hide, Unhide, and visibility are unchanged.
+
 ## Problem Statement
 
 DealRadar currently offers only preference feedback: Like and Not for me. A

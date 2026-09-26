@@ -5,7 +5,7 @@ DealRadar is a personal deal-tracking application for products from Vinted and Z
 The system is split into two GitHub repositories:
 
 * `runethorbek/deals` — scraping and scheduled data collection
-* `runethorbek/dealradar` — web application, database, product evaluation, feedback, and later notifications
+* `runethorbek/dealradar` — web application, database, product evaluation, and later notifications
 
 ## Architecture
 
@@ -26,7 +26,7 @@ Gemini evaluation
     ↓
 DealRadar web UI
     ↓
-Later: Slack notifications / feedback
+Later: Slack notifications
 ```
 
 ## 1. Scrapers
@@ -196,26 +196,6 @@ Used for:
 
 A product can only have one snapshot for the same observation timestamp.
 
-### `product_feedback`
-
-Stores manual feedback from the DealRadar UI.
-
-Current values:
-
-```text
-like
-dislike
-```
-
-The meaning is:
-
-* `like` — I like this product / it fits my taste
-* `dislike` — this product is not for me
-
-This feedback is about the product itself, not whether Gemini's evaluation was correct.
-
-Only the latest feedback value is stored for each product.
-
 ### `preferences`
 
 Stores a single editable text profile describing personal preferences.
@@ -277,7 +257,7 @@ Gemini returns structured output similar to:
 }
 ```
 
-The preference profile and feedback remain stored in Neon, so the system's persistent "memory" belongs to DealRadar rather than Gemini.
+The preference profile remains stored in Neon, so the system's persistent "memory" belongs to DealRadar rather than Gemini.
 
 ## 7. Vercel
 
@@ -510,7 +490,6 @@ Responsible for:
 * normalization
 * persistent product state
 * price history
-* feedback
 * preference profile
 * Gemini evaluations
 * ranking
@@ -534,23 +513,6 @@ high preference score + strong deal score
     ↓
 Slack notification
 ```
-
-A future Slack app could also include interactive feedback buttons such as:
-
-```text
-Like
-Not for me
-```
-
-Those interactions should normally call DealRadar directly:
-
-```text
-Slack
-→ DealRadar API
-→ Neon
-```
-
-There is normally no reason to involve GitHub Actions for simple feedback.
 
 A Slack action could later trigger a GitHub Action for operations such as:
 
