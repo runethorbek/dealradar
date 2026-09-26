@@ -124,7 +124,7 @@ project's environment, and never commit them:
 | `SLACK_BOT_TOKEN` | A real Slack bot token authorized to post to the non-production channel | Finalization, `/api/slack-test` |
 | `SLACK_CHANNEL_ID` | The **non-production** Slack channel's ID | Finalization, `/api/slack-test` |
 | `INGEST_API_KEY` | Any value you choose locally; must match the bearer token you send | `/api/import-deals` authorization |
-| `OWNER_EMAIL` | Only needed if you also want to sign in and use the dashboard's Evaluate/Like/Hide/Watch actions manually | Owner-gated mutating routes (not required for the core live leg) |
+| `OWNER_EMAIL` | Only needed if you also want to sign in and use the dashboard's Evaluate/Hide/Watch actions manually | Owner-gated mutating routes (not required for the core live leg) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Only needed for the manual owner sign-in above | NextAuth |
 
 `DATABASE_URL`, `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`/`SLACK_CHANNEL_ID`, and

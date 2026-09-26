@@ -5,15 +5,15 @@ after an import, per source. It is the policy from #55, implemented since
 #60; see [Current production paths](#current-production-paths) and
 [Implementation status](#implementation-status).
 
-Terms (Preference score, Deal score, Overall score, Watch, Hide, Like,
-Not for me, Recommendation) are defined in `docs/ubiquitous-language.md`.
+Terms (Preference score, Deal score, Overall score, Watch, Hide,
+Recommendation) are defined in `docs/ubiquitous-language.md`.
 
 ## Principles
 
 - Vinted and Zalando have separate, explicit policies. There is no generic
   cross-source recommendation formula and no comparison between sources.
-- Preference = general taste. Like / Not for me = optional examples of that
-  taste. Watch = explicit interest in one exact product. Deal = current buying
+- Preference = general taste, expressed in the written preference profile.
+  Watch = explicit interest in one exact product. Deal = current buying
   opportunity. Overall = ranking of Preference + Deal.
 - Slack is only the output channel. The policy decides what is recommended;
   Slack formatting does not.
@@ -49,8 +49,6 @@ These rules apply to every recommendation below.
   source has one does selection fall back to candidates with a source price
   and source currency. This keeps today's fallback behavior.
 - **Tie-breaks are deterministic** and end with ascending product id.
-- **Like / Not for me have no direct recommendation priority** (see
-  [Like / Not for me](#like--not-for-me)).
 
 ## Vinted recommendation
 
@@ -64,7 +62,7 @@ Question answered: *what is the best current listing available to me now?*
 3. Select the highest Overall.
 4. Ties: higher Overall → higher Deal score → ascending product id.
 
-Vinted has no price-history, watched-product, or Like-based rules. Watched
+Vinted has no price-history or watched-product rules. Watched
 Vinted products receive no special priority.
 
 ## Zalando recommendation
@@ -156,16 +154,13 @@ a product that has been hidden or unwatched since the import no longer
 qualifies, and its current stored evaluation (if any) is used for the Overall
 tie-break.
 
-## Like / Not for me
+## Removed: Like / Not for me
 
-- The written preference profile is the primary Preference signal.
-- Recent Like / Not for me feedback is secondary context supplied to Gemini as
-  examples of the user's taste. It can influence Preference score through
-  Gemini, and so indirectly Overall score.
-- Like has **no direct recommendation priority**. There is no Liked
-  price-drop rule.
-- Not for me does not exclude a product from recommendations; it is not Hide.
-- Whether Like / Not for me should be kept is assessed separately in #61.
+Like / Not for me feedback was removed in #66, following the #61
+investigation. It had no recommendation, ranking, or visibility role; its only
+remaining use was as secondary examples in the Gemini evaluation prompt. The
+written preference profile is the only Preference signal. There is no Liked
+price-drop rule.
 
 ## Current production paths
 
@@ -207,6 +202,7 @@ possible Zalando recommendation is a watched historical-low event.
 | 3 | #59 | Zalando watched historical-low event |
 | 4 | #60 | Zalando fallback |
 | 5 | #61 | Reassess Like / Not for me (investigation) |
+| 6 | #66 | Remove Like / Not for me |
 
 #58 changed the Slack message from one highlight to up to two (one per
 source). #59 added the Zalando watched historical-low step. #60 replaced the

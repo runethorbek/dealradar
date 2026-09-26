@@ -1,5 +1,3 @@
-export type Rating = "like" | "dislike";
-
 export type ProductEvaluation = {
   preferenceScore: number;
   dealScore: number;
@@ -22,7 +20,6 @@ export type ProductCardProduct = {
   lastSeenAt: string;
   hidden: boolean;
   watched: boolean;
-  feedback: Rating | null;
   evaluation: ProductEvaluation | null;
   observationCount?: number | null;
   lowestObservedPrice?: string | null;

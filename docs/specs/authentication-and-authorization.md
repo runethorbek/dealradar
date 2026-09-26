@@ -1,5 +1,9 @@
 # Authentication and Authorization
 
+> Note: product feedback (Like / Not for me) and `POST /api/product-feedback`
+> were removed in #66. References to them in the acceptance criteria and
+> implementation history below are historical.
+
 ## Goal
 
 Protect DealRadar so only the owner can use user-facing write functionality.
@@ -13,7 +17,6 @@ Protect user-facing DealRadar functionality that changes persistent state.
 This includes:
 
 - updating preferences;
-- submitting product feedback;
 - future user-triggered write operations.
 
 System-to-system endpoints must keep their existing authentication model where appropriate.
@@ -48,7 +51,6 @@ The authenticated identity must match the configured lowercase owner email addre
 The following operations must require an authenticated and authorized user:
 
 - `POST /api/preferences`
-- `POST /api/product-feedback`
 - `POST /api/product-visibility`
 - `POST /api/evaluate-product`
 

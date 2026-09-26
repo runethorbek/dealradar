@@ -115,7 +115,6 @@ export async function getLatestDashboardProducts(
           p.last_seen_at::TEXT AS "lastSeenAt",
           p.hidden,
           p.watched,
-          pf.rating AS feedback,
           CASE
             WHEN pe.product_id IS NULL THEN NULL
             ELSE json_build_object(
@@ -128,7 +127,6 @@ export async function getLatestDashboardProducts(
           END AS evaluation,
           ${snapshotSummaryFields(sql)}
         FROM products p
-        LEFT JOIN product_feedback pf ON pf.product_id = p.id
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
         WHERE p.source = ${source}
@@ -169,7 +167,6 @@ export async function getLatestDashboardProducts(
           p.last_seen_at::TEXT AS "lastSeenAt",
           p.hidden,
           p.watched,
-          pf.rating AS feedback,
           CASE
             WHEN pe.product_id IS NULL THEN NULL
             ELSE json_build_object(
@@ -182,7 +179,6 @@ export async function getLatestDashboardProducts(
           END AS evaluation,
           ${snapshotSummaryFields(sql)}
         FROM products p
-        LEFT JOIN product_feedback pf ON pf.product_id = p.id
         LEFT JOIN product_evaluations pe ON pe.product_id = p.id
         ${snapshotSummaryJoin(sql)}
         WHERE (
@@ -232,7 +228,6 @@ export async function getLatestDashboardProducts(
       p.last_seen_at::TEXT AS "lastSeenAt",
       p.hidden,
       p.watched,
-      pf.rating AS feedback,
       CASE
         WHEN pe.product_id IS NULL THEN NULL
         ELSE json_build_object(
@@ -245,7 +240,6 @@ export async function getLatestDashboardProducts(
       END AS evaluation,
       ${snapshotSummaryFields(sql)}
     FROM products p
-    LEFT JOIN product_feedback pf ON pf.product_id = p.id
     LEFT JOIN product_evaluations pe ON pe.product_id = p.id
     ${snapshotSummaryJoin(sql)}
     WHERE p.id = ${highlightedProductId}

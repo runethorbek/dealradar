@@ -10,6 +10,7 @@ let session: { user?: { email?: string | null; emailVerified?: boolean } } | nul
 let sessionCalls = 0;
 let neonCalls = 0;
 let persistenceCalls = 0;
+let persistedQueries: string[] = [];
 let geminiClientCalls = 0;
 let geminiRequestCalls = 0;
 let geminiContents = "";
@@ -50,6 +51,7 @@ mockModule("@neondatabase/serverless", {
     return async (strings: TemplateStringsArray, ...values: unknown[]) => {
       persistenceCalls += 1;
       const query = strings.join(" ");
+      persistedQueries.push(query);
 
       if (query.includes("FROM products")) {
         return [{
@@ -60,7 +62,6 @@ mockModule("@neondatabase/serverless", {
       }
 
       if (query.includes("FROM preferences")) return [];
-      if (query.includes("FROM product_feedback")) return [];
       if (query.includes("FROM product_snapshots")) return [];
 
       // INSERT INTO product_evaluations (product_id, preference_score, deal_score, reason, translated_listing_text_da)
@@ -121,6 +122,7 @@ function reset(nextSession: typeof session) {
   sessionCalls = 0;
   neonCalls = 0;
   persistenceCalls = 0;
+  persistedQueries = [];
   geminiClientCalls = 0;
   geminiRequestCalls = 0;
   geminiContents = "";
@@ -185,7 +187,7 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
   assert.equal(response.status, 200);
   assert.equal(sessionCalls, 1);
   assert.equal(neonCalls, 1);
-  assert.equal(persistenceCalls, 5);
+  assert.equal(persistenceCalls, 4);
   assert.equal(geminiClientCalls, 1);
   assert.equal(geminiRequestCalls, 1);
   assert.doesNotMatch(geminiContents, /targetSize|target_size|category/i);
@@ -195,6 +197,10 @@ test("allows the owner to preserve successful evaluation behavior", async () => 
     /do not treat monitor IDs as authoritative product attributes/i,
   );
   assert.equal(getEvaluationContext().product.source, "vinted.com");
+  assert.equal("recentFeedback" in getEvaluationContext(), false);
+  assert.doesNotMatch(geminiContents, /likes|dislikes|feedback/i);
+  assert.doesNotMatch(geminiSystemInstruction, /feedback/i);
+  assert.equal(persistedQueries.some((query) => query.includes("product_feedback")), false);
   assert.deepEqual(await response.json(), {
     success: true,
     evaluation: {

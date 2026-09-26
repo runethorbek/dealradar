@@ -1,42 +1,12 @@
 # DealRadar Ubiquitous Language
 
-## Like
-
-A user feedback signal meaning:
-
-> "This product is relevant to my taste and I would like DealRadar to learn
-> from it."
-
-"Like" is primarily preference feedback.
-
-It does not necessarily mean:
-- the current price is good;
-- the user intends to buy it now;
-- the deal score should be high.
-
-A product can be highly liked while being a poor deal.
-
-## Not for me
-
-A user feedback signal meaning:
-
-> "This product is not a good match for my taste and DealRadar should learn
-> to recommend fewer products like it."
-
-"Not for me" is primarily preference feedback.
-
-It does not necessarily mean:
-- the product is objectively bad;
-- the price is bad;
-- the retailer or product data is incorrect.
-
 ## Visibility
 
 The presentation state that determines whether a tracked product appears in
 the user's default product view.
 
-Visibility is separate from preference feedback. A product may be hidden while
-being liked or marked "Not for me."
+Visibility is separate from Preference. Hiding a product says nothing about
+whether it matches the user's taste.
 
 ## Hide
 
@@ -45,8 +15,8 @@ A reversible visibility action meaning:
 > "Keep tracking this product, but do not show it in my default product view
 > or product recommendations until I choose Unhide."
 
-Hide is not preference feedback. It must not teach DealRadar that the product
-is liked or not relevant. Hiding does not change existing import, evaluation
+Hide is not a Preference signal. It must not teach DealRadar that the product
+is or is not relevant to the user's taste. Hiding does not change existing import, evaluation
 eligibility, scoring, sorting, or price-tracking behavior.
 
 Hidden products remain available through the Hidden view. An explicitly
@@ -59,9 +29,7 @@ but hiding does not affect operational import summaries or scan warnings.
 A visibility action that returns a hidden product to the default product view
 and product recommendation eligibility.
 
-Unhide is always explicit and does not change existing Like or Not for me
-feedback. Like and Not for me never change product visibility. Unhide restores
-eligibility for future product recommendations but does not itself trigger a
+Unhide is always explicit. Unhide restores eligibility for future product recommendations but does not itself trigger a
 notification.
 
 ## Watch
@@ -73,8 +41,8 @@ A reversible tracking-intent action meaning:
 
 The active state is called **Watched**, and watched products can be retrieved
 through the **Watchlist** view. Watch is independent from visibility and
-preference feedback: watching does not Like, unhide, hide, or otherwise
-re-rank a product, and those actions do not change Watch state.
+Preference: watching does not unhide, hide, or otherwise re-rank a product,
+and those actions do not change Watch state.
 
 The Watchlist includes both visible and hidden watched products. Hidden
 products remain clearly identified as Hidden there; Watch does not change
@@ -88,7 +56,7 @@ transition: the new same-currency observation is strictly lower than the
 previous observation and at or below the lowest earlier same-currency
 observation. Remaining at the same low price is not a new event. Watch gives no
 recommendation priority for Vinted. This does not change dashboard ranking,
-visibility, feedback, evaluation input, or the absence of target-price alerts.
+visibility, evaluation input, or the absence of target-price alerts.
 
 Since #60, the watched historical-low event is the only recommendation
 priority Watch gives in production: a Watched Zalando price drop that is not a
@@ -98,7 +66,7 @@ priority.
 ## Preference score
 
 A score from 1-10 representing how well the product matches the user's
-learned and explicitly stated preferences.
+stated preferences. The written preference profile is the Preference signal.
 
 Preference score should consider characteristics such as:
 - style
@@ -107,7 +75,6 @@ Preference score should consider characteristics such as:
 - color
 - brand where relevant
 - product type when it can be established reliably from the supplied product data
-- details learned from Like / Not for me feedback
 
 Preference score should not primarily reflect whether the current price is
 attractive.
@@ -165,15 +132,12 @@ watched historical-low event.
 Recommendations are per source: an import has at most one Vinted
 recommendation and at most one Zalando recommendation, and the sources are
 never compared with each other. Hidden products are never recommended.
-Like / Not for me have no direct recommendation priority; they only inform
-Gemini's Preference score as secondary examples. The full rules are in
-`docs/recommendation-policy.md`.
+The full rules are in `docs/recommendation-policy.md`.
 
 A recommendation does not imply an instruction to purchase.
 
-Since #60, both the Vinted and the Zalando recommendation follow the policy;
-Liked products, including Liked Zalando price drops, receive no selection
-priority. See "Current production paths" in `docs/recommendation-policy.md`.
+Since #60, both the Vinted and the Zalando recommendation follow the policy.
+See "Current production paths" in `docs/recommendation-policy.md`.
 
 ## New recommendation
 

@@ -7,7 +7,7 @@ DealRadar is a personal deal-tracking system that collects product data from ext
 The system is intentionally split across two repositories:
 
 - `runethorbek/deals` — scraping and source-specific extraction
-- `runethorbek/dealradar` — normalization, persistence, evaluation, ranking, feedback, UI, and notifications
+- `runethorbek/dealradar` — normalization, persistence, evaluation, ranking, UI, and notifications
 
 This boundary is intentional and should be preserved unless there is a clear reason to change it.
 
@@ -70,7 +70,7 @@ The `dealradar` repository owns:
 - preserving source values separately from normalized values;
 - product persistence;
 - historical snapshots;
-- preferences and user feedback;
+- preferences;
 - Gemini evaluation;
 - ranking;
 - the web application;
@@ -146,7 +146,6 @@ Important categories of state include:
 - source values;
 - normalized prices;
 - historical snapshots;
-- feedback;
 - preference profile;
 - latest evaluation.
 
@@ -175,7 +174,7 @@ round-trip a small synthetic product feed correctly.
 
 Gemini is an evaluation service, not the system of record.
 
-DealRadar supplies the relevant product, preference, feedback, and price-history context.
+DealRadar supplies the relevant product, preference, and price-history context.
 
 Gemini returns structured evaluation output.
 

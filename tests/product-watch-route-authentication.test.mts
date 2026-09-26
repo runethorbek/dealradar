@@ -34,7 +34,7 @@ mockModule("@neondatabase/serverless", {
       persistenceCalls += 1;
       const query = strings.join("$parameter");
       assert.match(query, /SET watched = \$parameter/);
-      assert.doesNotMatch(query, /hidden|product_feedback|rating/);
+      assert.doesNotMatch(query, /hidden/);
       assert.equal(typeof values[0], "boolean");
       assert.equal(typeof values[1], "string");
       if (databaseResult === "error") throw new Error("database failure");
@@ -92,7 +92,7 @@ test("returns 403 before persistence for a non-owner", async () => {
   assert.deepEqual(persistedWatched, []);
 });
 
-test("the owner can persist Watch and Unwatch without changing feedback or visibility", async () => {
+test("the owner can persist Watch and Unwatch without changing visibility", async () => {
   for (const watched of [true, false]) {
     reset({ user: { email: "owner@example.com", emailVerified: true } });
     const response = await POST(watchRequest(watched));

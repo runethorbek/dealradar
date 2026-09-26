@@ -7,13 +7,12 @@ import { useState } from "react";
 import type {
   ProductCardProduct,
   ProductEvaluation,
-  Rating,
 } from "@/lib/dashboard-product.mts";
 import { getPriceHistorySummary } from "@/lib/price-history-summary.mts";
 import { getProductDisplayTitle } from "@/lib/vinted-display-title.mts";
 import { defaultRankingSettings, getOverallScore as computeOverallScore } from "@/lib/ranking-settings.mts";
 
-export type { ProductCardProduct, ProductEvaluation, Rating };
+export type { ProductCardProduct, ProductEvaluation };
 
 function isProductEvaluation(value: unknown): value is ProductEvaluation {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -133,11 +132,6 @@ export function ProductCard({
   const visibilityAction = product.hidden ? "Unhide" : "Hide";
   const visibilityPendingLabel = product.hidden ? "Unhiding..." : "Hiding...";
   const watchAction = product.watched ? "Unwatch" : "Watch";
-  const [feedback, setFeedback] = useState<Rating | null>(product.feedback);
-  const [saving, setSaving] = useState<Rating | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [feedbackSignInRequired, setFeedbackSignInRequired] = useState(false);
-  const [feedbackUnauthorized, setFeedbackUnauthorized] = useState(false);
   const [evaluation, setEvaluation] = useState<ProductEvaluation | null>(
     product.evaluation,
   );
@@ -187,45 +181,6 @@ export function ProductCard({
       setEvaluationFailed(true);
     } finally {
       setEvaluating(false);
-    }
-  }
-
-  async function saveFeedback(rating: Rating) {
-    setSaving(rating);
-    setFailed(false);
-    setFeedbackSignInRequired(false);
-    setFeedbackUnauthorized(false);
-
-    try {
-      const response = await fetch("/api/product-feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id, rating }),
-      });
-      const result = (await response.json()) as { rating?: unknown };
-
-      if (response.status === 401) {
-        setFeedbackSignInRequired(true);
-        return;
-      }
-
-      if (response.status === 403) {
-        setFeedbackUnauthorized(true);
-        return;
-      }
-
-      if (
-        !response.ok ||
-        (result.rating !== "like" && result.rating !== "dislike")
-      ) {
-        throw new Error("Feedback request failed.");
-      }
-
-      setFeedback(result.rating);
-    } catch {
-      setFailed(true);
-    } finally {
-      setSaving(null);
     }
   }
 
@@ -454,58 +409,6 @@ export function ProductCard({
           </div>
         )}
       </div>
-
-      <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
-        <span className="mr-auto text-xs text-zinc-400">
-          Do you like this product?
-        </span>
-        {(["like", "dislike"] as const).map((rating) => {
-          const isActive = feedback === rating;
-          const isLike = rating === "like";
-          const label = isLike ? "Like" : "Not for me";
-
-          return (
-            <button
-              key={rating}
-              type="button"
-              aria-label={label}
-              aria-pressed={isActive}
-              disabled={saving !== null || feedbackSignInRequired || feedbackUnauthorized}
-              onClick={() => saveFeedback(rating)}
-              className={`rounded-md border px-2.5 py-1.5 text-sm transition disabled:cursor-wait disabled:opacity-60 ${
-                isActive
-                  ? isLike
-                    ? "border-emerald-200 bg-emerald-50"
-                    : "border-rose-200 bg-rose-50"
-                  : "border-zinc-200 bg-white hover:bg-zinc-50"
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {failed ? (
-        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
-          Could not save feedback.
-        </p>
-      ) : null}
-      {feedbackSignInRequired ? (
-        <p className="px-5 pb-3 text-right text-xs text-zinc-600" role="status">
-          <a
-            href={`/api/auth/signin?callbackUrl=${encodeURIComponent(authCallbackPath)}`}
-            className="underline hover:text-zinc-950"
-          >
-            Sign in
-          </a>
-          {" "}to save feedback.
-        </p>
-      ) : null}
-      {feedbackUnauthorized ? (
-        <p className="px-5 pb-3 text-right text-xs text-rose-600" role="status">
-          You don&apos;t have permission to save feedback.
-        </p>
-      ) : null}
 
       <div className="flex items-center gap-2 border-t border-zinc-100 px-5 py-3">
         <span className="mr-auto text-xs text-zinc-400">Product state</span>
