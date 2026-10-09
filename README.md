@@ -469,6 +469,93 @@ When a new migration is added:
 4. Commit/push the migration file
 ```
 
+## Claude Code skills
+
+Selected Claude Code skills, and the subagents they depend on, are copied from
+the central repository `runethorbek/skills` into `.claude/skills/` and
+`.claude/agents/`, so Claude Code on the web can use them in this repository. `runethorbek/skills` is the source of truth: do not
+edit the synchronized copies here, change them in `runethorbek/skills` and
+synchronize again.
+
+| File | Purpose |
+| --- | --- |
+| `.github/workflows/sync-claude-skills.yml` | Manually triggered workflow that synchronizes and opens a pull request |
+| `.github/scripts/sync-claude-skills.sh` | Copies the selected skills and agents; never runs anything from the source repository |
+| `.github/claude-skills.txt` | Which skills and agents to synchronize |
+| `.claude/skills-sync-manifest.txt` | Generated: source repository, source commit SHA, and the synchronized skills and agents |
+
+### Trigger a synchronization
+
+GitHub → **Actions** → **Sync Claude Code skills** → **Run workflow**.
+Optionally enter a branch, tag, or commit SHA of `runethorbek/skills`
+(default `main`).
+
+The workflow copies `claude/skills/<name>/` for every selected skill and
+`claude/agents/<name>.md` for every selected agent, and:
+
+* opens a pull request from the `automation/sync-claude-skills` branch, or
+  updates the one that is already open;
+* does nothing if the selected skills and agents already match `main`;
+* fails without changing anything if a selected skill or agent does not exist
+  in the source, contains a symlink, or would overwrite a project-specific
+  skill or agent of the same name.
+
+Repository settings this needs once:
+
+* **Settings → Actions → General → Workflow permissions**: enable
+  **Allow GitHub Actions to create and approve pull requests**.
+* Only if `runethorbek/skills` becomes private: add a repository secret
+  `SKILLS_SOURCE_TOKEN` holding a fine-grained token with read-only
+  **Contents** access to `runethorbek/skills`. A public source needs no secret.
+
+### Configure the selected skills and agents
+
+Edit `.github/claude-skills.txt`, one entry per line:
+
+* `<name>` selects the skill `claude/skills/<name>/`;
+* `agent:<name>` selects the agent `claude/agents/<name>.md`.
+
+Select the agents a skill depends on together with the skill: `build-slice`
+needs `agent:slice-implementer` and `agent:slice-reviewer`.
+
+Commit the change to `main` and run the workflow. An entry removed from the
+list is deleted from `.claude/` by the next synchronization. Skills and agents
+in `.claude/` that were never synchronized (project-specific ones) are never
+touched.
+
+### Review synchronized changes
+
+The pull request contains only `.claude/skills/<name>/` files,
+`.claude/agents/<name>.md` files, and `.claude/skills-sync-manifest.txt`. The `commit=` line in the manifest and the
+pull request description link the exact source commit. Check that the diff
+contains only the skills you selected and that their content is what you
+expect, then merge as usual.
+
+Pull requests created by GitHub Actions do not start the `CI / verify` check
+automatically. Close and reopen the pull request to run it.
+
+Re-running the workflow when the selected skills and agents have not changed produces no
+changes, even if `runethorbek/skills` has newer, unrelated commits; the
+manifest then keeps the commit of the last actual change.
+
+### Remove the integration
+
+Delete these files and the synchronized skills and agents in one pull request:
+
+```text
+.github/workflows/sync-claude-skills.yml
+.github/scripts/sync-claude-skills.sh
+.github/claude-skills.txt
+.claude/skills-sync-manifest.txt
+.claude/skills/<each skill listed in the manifest>/
+.claude/agents/<each agent listed in the manifest>.md
+tests/sync-claude-skills.test.mts   (and its entry in the "test" script in package.json)
+```
+
+Then delete the `automation/sync-claude-skills` branch and, if it was created,
+the `SKILLS_SOURCE_TOKEN` secret. Nothing else in DealRadar depends on these
+files.
+
 ## Current responsibilities
 
 ### `deals` repository
