@@ -1,0 +1,15 @@
+# Claude Code skills and agents synchronized from runethorbek/skills by
+# .github/workflows/sync-claude-skills.yml.
+#
+# One entry per line. Blank lines and text after # are ignored.
+#   <name>        skill:  claude/skills/<name>/     -> .claude/skills/<name>/
+#   agent:<name>  agent:  claude/agents/<name>.md   -> .claude/agents/<name>.md
+# Removing an entry removes it from .claude/ on the next sync.
+
+agent-ready
+build-slice
+draft-issue
+
+# Subagents used by build-slice.
+agent:slice-implementer
+agent:slice-reviewer

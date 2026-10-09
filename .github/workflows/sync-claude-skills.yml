@@ -1,0 +1,118 @@
+name: Sync Claude Code skills
+
+# Copies the skills and agents selected in .github/claude-skills.txt from
+# runethorbek/skills into .claude/skills/ and .claude/agents/ and proposes the
+# result as a pull request. Nothing from the source repository is executed. See README.md
+# ("Claude Code skills").
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag, or commit SHA in runethorbek/skills to synchronize from
+        required: false
+        default: main
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sync-claude-skills
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: runethorbek/skills
+  SYNC_BRANCH: automation/sync-claude-skills
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      # SKILLS_SOURCE_TOKEN is only needed if runethorbek/skills is private: a
+      # fine-grained token with read-only Contents access to that repository.
+      # A public source repository is read with the workflow's own token.
+      - name: Check out skills source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ inputs.source_ref }}
+          path: .skills-source
+          token: ${{ secrets.SKILLS_SOURCE_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Synchronize selected skills and agents
+        id: sync
+        run: |
+          source_commit=$(git -C .skills-source rev-parse HEAD)
+          bash .github/scripts/sync-claude-skills.sh \
+            .skills-source "$SOURCE_REPOSITORY" "$source_commit" \
+            .github/claude-skills.txt .claude .claude/skills-sync-manifest.txt
+          rm -rf .skills-source
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Detect changes
+        id: changes
+        run: |
+          git add -A -- .claude/skills .claude/agents .claude/skills-sync-manifest.txt
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Selected skills and agents already match $SOURCE_REPOSITORY@$SOURCE_COMMIT. No pull request needed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "Changed files:"
+              echo '```'
+              git diff --cached --stat
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          SOURCE_COMMIT: ${{ steps.sync.outputs.source_commit }}
+
+      - name: Create or update pull request
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          short_commit=${SOURCE_COMMIT:0:7}
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet \
+            -m "Sync Claude Code skills from $SOURCE_REPOSITORY@$short_commit" \
+            -m "Source: https://github.com/$SOURCE_REPOSITORY/commit/$SOURCE_COMMIT"
+
+          # Skip the push if the sync branch already holds exactly this content.
+          if git fetch --quiet origin "refs/heads/$SYNC_BRANCH" 2>/dev/null \
+            && [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+            echo "$SYNC_BRANCH already contains these changes."
+          else
+            git push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
+          fi
+
+          existing_pr=$(gh pr list --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -n "$existing_pr" ]; then
+            gh pr edit "$existing_pr" --title "Sync Claude Code skills from $SOURCE_REPOSITORY@$short_commit"
+            echo "Updated existing pull request: $existing_pr" >> "$GITHUB_STEP_SUMMARY"
+          else
+            body=$(printf '%s\n' \
+              "Synchronizes the Claude Code skills and agents selected in \`.github/claude-skills.txt\` from [$SOURCE_REPOSITORY@$short_commit](https://github.com/$SOURCE_REPOSITORY/commit/$SOURCE_COMMIT) into \`.claude/skills/\` and \`.claude/agents/\`." \
+              "" \
+              "Created by the [Sync Claude Code skills workflow run]($RUN_URL). Review the copied files before merging; the source commit is recorded in \`.claude/skills-sync-manifest.txt\`." \
+              "" \
+              "CI does not start automatically for pull requests created by GitHub Actions. Close and reopen this pull request to run it.")
+            pr_url=$(gh pr create --base "$BASE_BRANCH" --head "$SYNC_BRANCH" \
+              --title "Sync Claude Code skills from $SOURCE_REPOSITORY@$short_commit" \
+              --body "$body")
+            echo "Created pull request: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          SOURCE_COMMIT: ${{ steps.sync.outputs.source_commit }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
