@@ -1,0 +1,8 @@
+# Managed by .github/workflows/sync-claude-skills.yml. Do not edit by hand.
+source=runethorbek/skills
+commit=20896fe2f6405c71cc44147cf7ecbee221eb95e2
+skill=agent-ready
+skill=build-slice
+skill=draft-issue
+agent=slice-implementer
+agent=slice-reviewer
