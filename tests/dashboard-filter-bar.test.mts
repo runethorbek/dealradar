@@ -242,13 +242,72 @@ test("Monitor selection navigates immediately while preserving compatible dashbo
   ]);
 });
 
-test("source switching clears the selected brand since available brands are source-specific", async () => {
+test("source switching clears the selected brand and monitor since both are source-specific", async () => {
   const container = await renderFilterBar();
 
   await select(container, "Filter deals by source", "vinted.com");
 
   assert.deepEqual(navigations, [
-    "/?source=vinted.com&sort=newest&view=hidden&freshness=7d&monitor=monitor-alpha",
+    "/?source=vinted.com&sort=newest&view=hidden&freshness=7d",
+  ]);
+});
+
+test("switching from Vinted to Zalando clears the selected brand and monitor", async () => {
+  const container = await renderFilterBar({
+    ...filterBarProps,
+    source: "vinted.com" as const,
+    brand: "H&M",
+    brands: ["H&M"],
+  });
+
+  await select(container, "Filter deals by source", "zalando.dk");
+
+  assert.deepEqual(navigations, [
+    "/?source=zalando.dk&sort=newest&view=hidden&freshness=7d",
+  ]);
+});
+
+test("switching from a source to All clears the selected brand and monitor", async () => {
+  const container = await renderFilterBar();
+
+  await select(container, "Filter deals by source", "");
+
+  assert.deepEqual(navigations, [
+    "/?sort=newest&view=hidden&freshness=7d",
+  ]);
+});
+
+test("switching from All to a source clears the selected monitor", async () => {
+  const container = await renderFilterBar({
+    ...filterBarProps,
+    source: null,
+    brand: null,
+  });
+
+  await select(container, "Filter deals by source", "zalando.dk");
+
+  assert.deepEqual(navigations, [
+    "/?source=zalando.dk&sort=newest&view=hidden&freshness=7d",
+  ]);
+});
+
+test("changing view navigates while preserving source, brand, monitor and other filters", async () => {
+  const container = await renderFilterBar();
+
+  await select(container, "Choose dashboard view", "watchlist");
+
+  assert.deepEqual(navigations, [
+    "/?source=zalando.dk&sort=newest&view=watchlist&freshness=7d&brand=Mango&monitor=monitor-alpha",
+  ]);
+});
+
+test("changing freshness navigates while preserving source, brand, monitor and other filters", async () => {
+  const container = await renderFilterBar();
+
+  await select(container, "Filter deals by freshness", "24h");
+
+  assert.deepEqual(navigations, [
+    "/?source=zalando.dk&sort=newest&view=hidden&brand=Mango&monitor=monitor-alpha",
   ]);
 });
 

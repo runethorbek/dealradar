@@ -109,7 +109,7 @@ export function DashboardFilterBar({
         <select
           aria-label="Filter deals by source"
           value={source ?? ""}
-          onChange={(event) => navigate(event.target.value as DashboardSource || null, undefined, undefined, undefined, null)}
+          onChange={(event) => navigate(event.target.value as DashboardSource || null, undefined, undefined, undefined, null, null)}
           className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm font-normal normal-case tracking-normal text-zinc-600"
         >
           {dashboardSourceFilters.map((filter) => <option key={filter.label} value={filter.value ?? ""}>{filter.label}</option>)}
