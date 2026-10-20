@@ -357,7 +357,9 @@ DEALRADAR                          v
                                     products.monitor_ids, monitor_definitions (+ scan evidence)
     detect events from inserted snapshots ──> watched historical-low (existing), Watched alerts (new)
     select evaluation candidates (unchanged) ──> evaluation run (unchanged)
-  Finalization (unchanged legacy message) ──> then: produce daily summary if due (idempotent per day)
+    deliver pending Watched alerts (non-fatal; D13)
+  Workflow: finalize step (unchanged legacy message) ──> NEW separate step: daily summary + pending alerts
+  No-candidate path: legacy message ──> daily summary + pending alerts, called directly (non-fatal)
   Daily summary:  load active monitor definitions + fresh members + stored evaluations
                   ──> pure policy (qualify, count, rank, select) ──> format ──> Slack
   Watched alerts: pending alert rows ──> format ──> Slack (claimed, idempotent)
@@ -511,9 +513,11 @@ Contract rules (Proposed):
   - a source with every monitor disabled is never rescanned, so its old
     feed keeps advertising its monitors every day (2.1);
   - a threshold change takes effect only after the next successful scan,
-    and a failed scan keeps the old definition;
-  - it adds fields to the strict per-source output validators
-    (`deals/scripts/scan-zalando.ts:604-631`).
+    and a failed scan keeps the old definition.
+
+  The per-source output validators would not block this option, because
+  they check named fields and do not reject extra ones
+  (`deals/scripts/scan-zalando.ts:604-631`). **Verified.**
 - **C. DealRadar reads `config/monitors.json` directly.** The internal
   scraper configuration would become a public contract, and DealRadar would
   depend on retailer filter details (#72 §5, §15).
@@ -554,7 +558,7 @@ enrichment" rule in `AGENTS.md`.
 | Partially completed publication | Not possible within one ref: the document is one file in one commit, and DealRadar reads one exact ref. |
 | Partially completed import | Definitions are written in the same `sql.transaction` as products and snapshots (`lib/import-persistence.mts:213-218`), so they commit or roll back together. |
 | Configuration changes during an import | Not visible to the import: everything comes from one ref. The daily summary reads persisted state once at summary time. |
-| Importing an older ref after a newer one | Definitions are applied only if the document's ref is not older than the stored `definition_ref`. The proposal compares the commit time; how to determine it is listed as risk R6. Otherwise they are left unchanged. |
+| Importing an older ref after a newer one | **The latest import is the truth**, which is today's semantics for product data (R1). A valid document from an older ref replaces the stored definitions, and `definition_ref` records which ref they came from. No commit-order guard is added. Rationale: production always imports the HEAD of Deals `main` (`deals/.github/workflows/daily-dealradar-import.yml:24`, **Verified**), so an older ref can only come from a manual call. The operator repairs that by importing `main` again. A guard would need the Deals commit time, which a raw-content fetch does not return (R6). Scan evidence is guarded separately with `GREATEST` (D4), because it uses feed timestamps rather than commit order. |
 
 **Alternatives considered.**
 
@@ -684,8 +688,19 @@ Ranking (Proposed). This keeps today's tie-breaks and adds no new formula:
 
 - `best_match`: qualifies when Overall (unrounded) ≥ `minimumOverallScore`.
   Order: higher Overall, then higher Deal score, then ascending product ID.
-  This matches `selectOverallRecommendation`
+  This ordering matches `selectOverallRecommendation`
   (`lib/import-notification.mts:241-269`).
+- **Display-price rule.** It carries over unchanged as an eligibility rule
+  for the best match, for both strategies. Today the function first keeps
+  only candidates with a displayable price, preferring the normalized pair
+  and falling back to the source pair only when no candidate has a
+  normalized pair (`lib/import-notification.mts:258-261`;
+  `docs/recommendation-policy.md`, "Display price"). **Verified.** The
+  proposal applies the rule per monitor to best-match selection only. A
+  qualifying product without a displayable price still counts in
+  `qualifyingCount` (**Proposed**). For `discount_threshold` the rule never
+  removes anything, because D8 already requires `current_price` and
+  `currency`.
 - `discount_threshold`: qualifies when the discount is reliable and ≥ the
   threshold (D8). The order among evaluated products is the same as above.
   How unevaluated products are handled is
@@ -760,7 +775,9 @@ retailer's data is read (`docs/architecture.md`; Q3). A discount is
 
 Conditions 3 and 4 exclude `explicit-discount-no-price`. A null discount
 excludes `no-discount-found`. This works without reading `discount_status`
-from `raw_data`.
+from `raw_data`. One weaker case remains: a `calculated-from-prices` discount
+that Deals inferred from unlabelled card prices. It is accepted here until
+[P13](#p13-inferred-pair-discounts) is decided (risk R11).
 
 The comparison is `d ≥ minimum_discount_percent` on the stored value. Deals
 rounds calculated discounts to 0.1 (`zalando-price.ts:152`); explicit
@@ -842,8 +859,13 @@ application operation over persisted state**,
 `produceDailySummary(summaryDate)`, and it is idempotent per summary date
 (D13). In v1 it is triggered at the end of the existing import pipeline:
 
-- by the finalizer, after the legacy message has been handled;
-- or, in the no-candidate path, after the legacy message.
+- by a **new Workflow step after** `finalizeEvaluationRunStep`, not inside
+  the finalizer;
+- or, in the no-candidate path, by the import route after the legacy
+  message.
+
+The trigger points and the retry path are specified in D13, "Delivery and
+retry".
 
 The daily import is already the daily scheduled job (2.1). Triggering there
 means the day's evaluations are complete, and no new scheduler, endpoint,
@@ -875,7 +897,8 @@ can call it (ADR 0001).
   the import at 05:00 UTC, and evaluation finishes asynchronously.
   Triggering after finalization uses complete evaluations.
 - **Stale products and failed scans.** Freshness is stated per monitor (D7).
-- **Retries and idempotency.** A claim per date (D13).
+- **Retries and idempotency.** A claim per date, step retries, and
+  same-date imports (D13, "Delivery and retry").
 - **Operational complexity.** No new component.
 - **Cost.** No Gemini calls and one Slack call per day.
 - **Limitation.** On a day with no completed import there is no summary.
@@ -902,11 +925,30 @@ observation *o* when all of these hold:
    [P1](#p1-watched-alert-transition-policy). Recommended: either
    - (i) **crossing**: the previous observation, meaning the latest earlier
      snapshot with a reliable discount, did not meet *T*; or
-   - (ii) **new best in episode**: whole-percent *d(o)* is above the highest
-     discount already alerted for (*p*, *M*) in the current **qualifying
-     episode** (proposed term: the run of consecutive qualifying
-     observations; an observation below *T* ends it and re-arms the
-     monitor).
+   - (ii) **new best in episode**: ⌊*d(o)*⌋ is above the highest ⌊*d*⌋
+     **observed** in the current **qualifying episode** before *o*.
+
+   A qualifying episode (proposed term) is the run of consecutive earlier
+   observations of *p* that have a reliable discount at or above *T*,
+   ending just before *o*. Observations without a reliable discount are
+   skipped, and the first observation below *T* ends the run. An observation
+   below *T* therefore re-arms the monitor.
+
+   - **Baseline.** The baseline is the highest discount **observed**, not the
+     highest discount alerted. Every alerted discount was also observed, so
+     the observed maximum is never lower. The observed baseline also covers
+     episodes that have no alert row: products already qualifying when they
+     become Watched, products qualifying at go-live, and products above a
+     newly lowered threshold. In those cases an unchanged discount does not
+     alert, which is consistent with the lifecycle table and P6(a).
+   - **Rounding.** Both sides are compared as whole percentages rounded
+     **down** (floor). Deals reports calculated discounts to 0.1
+     (`deals/scripts/lib/zalando-price.ts:152`). Flooring means 20.9 does not
+     count as an improvement over 20.0, and only a step to the next whole
+     percentage point does.
+   - **Episode state.** It is derived from `product_snapshots` alone, using
+     *T* at detection time. Alert rows record what was sent; they are not
+     needed to decide the transition.
 
 With the #72 §9 example and *T* = 20 under the recommended rule:
 
@@ -931,7 +973,7 @@ Lifecycle (Proposed; marked where a product decision applies):
 | Monitor disabled or removed | Not active, so no alerts. |
 | Price falls and later recovers | Falling below *T* ends the episode. A later crossing alerts again. |
 | Repeated identical observations | Same `observed_at`: no snapshot, no event. New `observed_at` with the same discount: no crossing and no new best, so no alert. |
-| Failed Slack notification | The alert row stays pending and is retried by the next delivery attempt under a claim (D13). |
+| Failed Slack notification | The alert row stays pending. It is retried by the next delivery attempt under a claim. The triggers are in D13 "Delivery and retry", and the late-delivery choice is P5. |
 | Import retries | Same ref, no inserted snapshot, no detection. Alert rows are unique per (*p*, *M*, snapshot). |
 | Delayed evaluations | Alerts do not need an evaluation. Overall is shown if a stored evaluation exists. |
 
@@ -950,8 +992,8 @@ improvement of N points, which adds a tunable. Detect at summary time, which
 loses the "new observation" anchor and repeats events.
 
 **Rationale.** A transition-based rule tied to inserted snapshots inherits
-the existing import idempotency. Episode state can be derived from snapshots
-plus alert rows, and it survives restarts.
+the existing import idempotency. Episode state is derived from stored
+snapshots, so it survives restarts and needs no extra state.
 
 ### D13. Notification idempotency
 
@@ -973,7 +1015,8 @@ new units:
   ```
 
   At most one summary row exists per date, and at most one is sent. A
-  failed send releases the claim, and the next trigger retries.
+  failed send releases the claim, so the row can be retried. The retry
+  path is described in "Delivery and retry" below.
 - **Watched alerts.** New table `watched_alerts`:
 
   ```text
@@ -996,6 +1039,57 @@ new units:
   pending rows per product and observation.
 - Import-level idempotency is **not** relied on for either (#72 §12).
   Interrupted jobs are recovered by lease expiry, as today.
+
+**Delivery and retry (Proposed).**
+
+Current behavior (**Verified**):
+
+- The finalizer is one Workflow step, `finalizeEvaluationRunStep`
+  (`workflows/evaluation-run-orchestration.ts:96-99`).
+- It returns early once the run's notification has been sent
+  (`lib/evaluation-finalization.mts:39`).
+- On a Slack failure it releases its claim and throws
+  (`lib/evaluation-finalization.mts:83-86`).
+- A Workflow step that throws is retried up to 3 times by default
+  (`node_modules/@workflow/core/dist/runtime/step-handler.js:18`,
+  `DEFAULT_STEP_MAX_RETRIES = 3`).
+
+Because of the early return, a summary placed **inside** the finalizer would
+never be retried once the legacy message had been sent. The proposal
+therefore separates them:
+
+- **Daily summary, evaluation-run path.** A new step,
+  `deliverDailyNotificationsStep`, runs after `finalizeEvaluationRunStep` in
+  `processEvaluationRunWithWorkflow`. It calls `produceDailySummary(date)`.
+  On a Slack failure it releases the claim and **throws**, so the step's
+  own retries (up to 3) try again. They resend the persisted content with
+  the same `client_msg_id`. The legacy step has already completed, so its
+  message is not affected. The step contains no policy and no Vercel types
+  in the application code (ADR 0001). If every retry fails, the run's
+  workflow ends failed after evaluation and the legacy message are already
+  complete. The summary row stays unsent.
+- **Daily summary, no-candidate path.** The import route calls
+  `produceDailySummary(date)` after the legacy message, in a `try/catch`.
+  A failure is logged and does not fail the import, which matches today's
+  Slack handling (`app/api/import-deals/route.ts:449-454`). There is no
+  automatic retry within the request.
+- **Retry beyond that.** Every later import with the same summary date,
+  scheduled or manual, calls the operation again and retries the unsent
+  row. Whether an unsent summary is sent after its date is open decision
+  [P5](#p5-daily-summary-date-send-time-and-fallback-trigger); not sending
+  it is recommended. The time-based fallback trigger is also P5.
+- **Watched alerts.** Detection writes `watched_alerts` rows in the import
+  route (D12). Pending rows are then delivered at two points:
+  - right after detection in the same request, which is non-fatal and
+    logged on failure;
+  - in the same daily-notification step or no-candidate call as the
+    summary, which catches rows left pending by earlier failures. In the
+    Workflow step, a failed alert send releases its claim and throws, like
+    the summary.
+
+  Rows still pending after these attempts are retried by the next import.
+  Whether old pending alerts are still sent, or are expired once the state
+  no longer holds, is also P5.
 
 **Alternatives considered.** Reuse `evaluation_runs` notification columns,
 which are keyed by run, not by day or alert. Rely on Slack deduplicating
@@ -1023,7 +1117,10 @@ concepts.
    - retires `selectVintedRecommendation` and
      `selectZalandoFallbackRecommendation`;
    - applies P4;
-   - updates the policy and ubiquitous-language documents.
+   - retires the per-source meaning of Recommendation and the term New
+     recommendation in `docs/ubiquitous-language.md`, and updates
+     `docs/recommendation-policy.md`. The new terms were already added in
+     S3a, S5, and S6 (§15).
 
 **Alternatives considered.** Replace in one step, which silently changes
 recommendation behavior (#72 §15). Keep both indefinitely, which gives two
@@ -1051,11 +1148,58 @@ applied to Neon manually before the code that uses it is deployed
 (`docs/architecture.md`, "Database responsibilities"). Applying each needs
 human approval.
 
+**Alternatives considered.**
+
+- **No new migrations.** Keep membership in `raw_data` and definitions,
+  summaries, and alerts in JSONB on existing rows, such as
+  `application_settings` or `evaluation_runs`. Membership would stay
+  non-authoritative (D5). Summary and alert state would lack the unique keys
+  that idempotency depends on (D13).
+- **A join table** `product_monitors` instead of the `TEXT[]` column. It is
+  rejected in D5: nothing needs per-monitor history, and it means more
+  writes per import.
+- **Reusing the `evaluation_runs` notification columns** for summaries and
+  alerts. They are keyed by run, not by date or alert (D13). A day without
+  candidates has no run at all (2.5).
+- **One combined migration for all tables.** That would require applying
+  schema for features not yet built. It would also tie S3–S6 together, so
+  one slice could not be deployed or rolled back without the others.
+
+**Rationale.** One additive migration per slice, applied just before that
+slice's code, keeps every slice independently deployable. Each migration
+is approved and applied on its own. Rollback never needs a destructive
+step.
+
 ### D16. Minimal implementation slices
 
 **Proposed.** See [13. Proposed child slices](#13-proposed-child-slices).
 There are 8 slices, ordered for deployment, and each can be verified on its
 own.
+
+**Alternatives considered.**
+
+- **Merge S3a and S3b.** This gives one DealRadar import slice with two
+  migrations. It is smaller in count, but the two changes have different
+  risks: a new document consumer, and a change to product data with a
+  backfill. They would no longer be reviewable, approvable, and revertible
+  separately.
+- **DealRadar first.** S3a could ship before S2 and tolerate the 404
+  (D3), but it would then be exercised only against "no document" until
+  Deals publishes. Deals first (S2 after S1) lets S3a be verified against a
+  real published document immediately. Both orders are safe (Q2), and
+  neither needs an atomic deploy.
+- **One slice for Phases 3–6.** This is a single large DealRadar change
+  with four migrations. It cannot be verified independently, it bundles
+  several approvals, and it violates #72 §13 ("independently verifiable
+  child issues").
+- **Folding S1 into S3a.** This saves a slice, but Deals would then publish
+  (S2) before any DealRadar test pins the tolerance that makes Deals-first
+  safe.
+
+**Rationale.** Each slice changes one concern, needs at most one migration,
+and has its own tests and approval items. The order follows the data
+dependencies: contract, then persistence, then policy, then outputs, then
+cleanup. No slice requires both repositories to deploy at once.
 
 ---
 
@@ -1157,9 +1301,9 @@ Scan warnings: Vinted 5/6 pages succeeded
 - **R1. Older-ref imports.** Importing an older ref overwrites `products`
   fields, including `last_seen_at`, `raw_data`, and the proposed
   `monitor_ids`, with older values (`lib/import-persistence.mts:88-101`).
-  **Verified** pre-existing behavior. The proposal guards scan evidence and
-  definitions (D3, D4), but not product fields. Changing that is an import
-  semantics change and is out of scope.
+  **Verified** pre-existing behavior. The proposal guards only scan evidence
+  (D4). Definitions follow the latest import, like product fields (D3).
+  Changing that is an import semantics change and is out of scope.
 - **R2. Invalid timestamp fallback.** An invalid `checked_at` falls back to
   the import time (`route.ts:203`), which would make stale data look fresh.
   Deals validates timestamps, so the risk is low. **Verified.**
@@ -1176,12 +1320,14 @@ Scan warnings: Vinted 5/6 pages succeeded
   not verified. A crash between a successful post and mark-sent can produce
   one duplicate after the lease expires. Today's mechanism has the same
   property (2.5).
-- **R6. Commit order.** Determining commit order for "older ref" guards
-  needs the Deals commit time. A raw-content fetch does not return it.
-  Options are to add a `generated_from_commit_time` field (but that loses
-  determinism), to call the GitHub API (an extra call), or to accept the
-  latest import as truth (today's semantics). This must be resolved in
-  S3a.
+- **R6. Older definitions after a manual import.** D3 chooses "the latest
+  import is the truth". A manual import of an older ref therefore applies
+  that ref's definitions until `main` is imported again. Two guards were
+  rejected. A `generated_from_commit_time` field in the document loses
+  determinism. A GitHub API call to get the commit time adds an external
+  call to every import. Production imports only `main` HEAD
+  (`deals/.github/workflows/daily-dealradar-import.yml:24`), so the exposure
+  is limited to manual calls.
 - **R7. Silent misses.** The daily summary depends on the import completing
   on that day (D11, P5).
 - **R8. Collection limits.** `pages` and retailer sort order limit what
@@ -1189,12 +1335,21 @@ Scan warnings: Vinted 5/6 pages succeeded
   seen. This is a scraping concern.
 - **R9. Duplicate notifications during transition.** Until P4 is applied,
   one Watched Zalando price drop could cause both a historical-low entry in
-  the per-import message and a Watched alert. Mitigation: deliver both
-  through the merged Watched alert message as soon as P4 is decided, or
-  accept the overlap for the observation period.
+  the per-import message and a Watched alert. How to handle this is a
+  sub-decision of [P4](#p4-fate-of-the-watched-historical-low-event).
 - **R10. Evaluation staleness.** The Deal score is computed at evaluation
   time. If the price changes and the product is not selected again (limit),
   the stored Deal score is stale ([P9](#p9-evaluation-staleness)).
+- **R11. Inferred price pairs.** `calculated-from-prices` has two cases. In
+  the labelled case the original price is marked `Normalpris` or
+  `Oprindeligt`. In the inferred case the original and current prices are
+  just the highest and lowest of two or more unlabelled card prices
+  (`deals/scripts/lib/zalando-price.ts:80-99` labelled, `:108-115` inferred).
+  **Verified.** The inferred case can produce a discount from prices that
+  are not a sale pair. The two cases have the same `discount_status`, so
+  DealRadar cannot tell them apart without new producer information. D8
+  treats both as reliable. Whether inferred-pair discounts may qualify is
+  open decision [P13](#p13-inferred-pair-discounts).
 
 ---
 
@@ -1269,6 +1424,18 @@ reviewer.
     does not, for example a lower price at the same displayed discount.
   - The merged message prevents duplicate notifications.
   - It leaves the "first Zalando recommendation priority" role in Phase 7.
+- Sub-decision: duplicates during the transition (R9). Between S6 and the
+  application of P4, one Watched Zalando price drop can appear both as a
+  historical-low entry in the per-import message and as a Watched alert.
+  - (i) Accept the overlap for the observation period.
+  - (ii) Have S6 suppress a Watched alert when the same product and
+    observation already has a watched historical-low event. S6 then reads
+    the events the import detected.
+  - (iii) Apply P4(c) inside S6, so the merge ships with Watched alerts.
+  - **Recommendation:** (i), because the overlap is rare (it needs a Watched
+    Zalando product with both a threshold event and a historical low in the
+    same observation) and it keeps S6 independent of the legacy path. Choose
+    (ii) if duplicates are not acceptable at all.
 
 ### P5. Daily summary date, send time, and fallback trigger
 
@@ -1280,8 +1447,20 @@ reviewer.
     marked "no import today". This needs `vercel.json` and a secret, which
     require approval.
   - (c) a Deals workflow step calling a new endpoint.
-- **Recommendation:** the Copenhagen date. (a) for v1, and (b) as a
-  follow-up only if missed days occur.
+- Options for a summary whose send failed after all automatic retries
+  (D13, "Delivery and retry"):
+  - (a) send it on any later import with the same summary date, and never
+    after that date;
+  - (b) also send it late, marked with its date, on the next day's
+    import.
+- Options for Watched alerts still pending after their delivery attempts:
+  - (a) deliver them on the next attempt whatever their age;
+  - (b) deliver them only while the product is still Watched, visible, and
+    qualifying, and drop older ones as expired.
+- **Recommendation:** the Copenhagen date. Fallback (a) for v1, with (b) as
+  a follow-up only if missed days occur. Failed summary (a): a day-old
+  summary is replaced by the new day's summary. Pending alerts (b): an alert
+  is not sent about a state that no longer holds.
 
 ### P6. Alert baseline: already-qualifying products and go-live
 
@@ -1348,6 +1527,23 @@ reviewer.
   monitor ID.
 - **Recommendation:** use `displayName` with the ID as fallback, and use
   the label "Best match" as in #72 §8, after the terminology review in §15.
+
+### P13. Inferred-pair discounts
+
+- Context: risk R11. A `calculated-from-prices` discount may come from an
+  unlabelled max and min price pair
+  (`deals/scripts/lib/zalando-price.ts:108-115`).
+- Options:
+  - (a) Accept every `calculated-from-prices` discount, as D8 does.
+  - (b) Exclude inferred-pair discounts from `discount_threshold`
+    qualification and Watched alerts. This needs an additive Deals field or
+    status that tells the two cases apart, which is a published-contract
+    change.
+  - (c) Accept them for the daily summary but not for Watched alerts, where
+    a false alert costs more.
+- **Recommendation:** (a) for v1. Record how often the inferred case occurs
+  in the production feed, and choose (b) if it is common or produces
+  visible false qualifications. (b) would be an extra Deals slice before S6.
 
 ---
 
@@ -1416,12 +1612,12 @@ commit, push, and merge.
 | --- | --- | --- | --- | --- | --- |
 | S1 | DealRadar | Characterization tests: the import accepts unknown top-level, `monitors[]`, and product fields, and never fetches other files. No behavior change. | No | None beyond commit and push | `npm test`. The new route tests pass against current code. |
 | S2 | Deals | `displayName` and `recommendation` in the configuration; a recommendation validator; a deterministic generator; a committed `public/deals/monitor-recommendations.json`; a CI sync check; `docs/output-contract.md` section. Scanners and feeds unchanged. | No | Deals: "change published JSON schemas or semantics" (a new published document). The initial threshold values are a product choice. | `npm test` and `npm run typecheck`. Validator accept/reject cases. The generator is deterministic. CI fails on drift. Scanner tests unchanged. |
-| S3a | DealRadar | Fetch, validate, and persist the monitor document at the import ref (D3, D4). Scan evidence from feed `monitors[]`. 404 tolerated. No change to recommendations or Slack. Update `docs/import-contract.md`. | `028` | Applying the production migration; changing the imported data contract (consuming a new document) | Unit tests for the D3 table. `npm run test:integration` applies `028` and round-trips definitions. On production after deploy, inspect `monitor_definitions`. |
+| S3a | DealRadar | Fetch, validate, and persist the monitor document at the import ref (D3, D4). Scan evidence from feed `monitors[]`. 404 tolerated. No change to recommendations or Slack. Update `docs/import-contract.md`. Add Monitor, Monitor definition, Active monitor, and Recommendation strategy to `docs/ubiquitous-language.md` (§15). | `028` | Applying the production migration; changing the imported data contract (consuming a new document) | Unit tests for the D3 table. `npm run test:integration` applies `028` and round-trips definitions. On production after deploy, inspect `monitor_definitions`. |
 | S3b | DealRadar | `products.monitor_ids` filled by the importer and backfilled (D5). Readers unchanged. Update `docs/import-contract.md` (membership becomes authoritative). | `029` | Applying the production migration; import semantics change for `monitor_ids` | Unit tests for validation and overwrite. Integration test for the backfill and round trip. After deploy, compare the column with `raw_data` for a sample. |
 | S4 | DealRadar | Pure policy module (D6–D10) and a read-only loader. Not wired to Slack. | No | None (no behavior change). The policy follows approved P2, P3, P8, and P9. | Unit tests for qualification, counts, ranking, ties, freshness, and unevaluated or Hidden products. Integration test for the loader query. |
-| S5 | DealRadar | Daily summary operation, formatter, and idempotent delivery. Triggered after finalization or the no-candidate path (D11, D13). The legacy message is unchanged. | `030` | Applying the production migration. A cron fallback, if P5(b) is chosen, also needs approval for the environment and secret. | Unit tests for the formatter and the claim, retry, and same-date paths. Integration test of `030`. Production smoke test: exactly one summary on the first import of a day, and none on a repeated import. |
-| S6 | DealRadar | Watched alert detection at import and idempotent delivery (D12, D13). The historical-low event is unchanged. | `031` | Applying the production migration | Table-driven tests from D12, including the #72 §9 sequence, retries, Hidden products, threshold change, and multiple monitors. Integration test of `031`. |
-| S7 | DealRadar (and an optional, separate Deals slice for P11) | Retire the per-source recommendation paths as per P4 and P7. Update `docs/recommendation-policy.md`, `docs/ubiquitous-language.md`, `docs/architecture.md`. Representative end-to-end check (#72 DoD 20). Fresh-context review. | No | Changes recommendation behavior; documentation of changed domain meaning. Explicit approval to remove the legacy behavior. | `npm test`, `npm run lint`, `npm run build`. A review that history and evaluations are preserved. An end-to-end run with two Vinted and two Zalando monitors. |
+| S5 | DealRadar | Daily summary operation, formatter, and idempotent delivery. Triggered by a new Workflow step after finalization, or by the no-candidate path (D11, D13). The legacy message is unchanged. In the same change, add Qualifying product, Best match, Discount, Daily summary, and Fresh to `docs/ubiquitous-language.md`, plus the parallel-run note on Recommendation (§15). Add a daily summary section to `docs/recommendation-policy.md`. | `030` | Applying the production migration; documentation of new domain terms. A cron fallback, if P5(b) is chosen, also needs approval for the environment and secret. | Unit tests for the formatter and the claim, retry, and same-date paths. Integration test of `030`. Production smoke test: exactly one summary on the first import of a day, and none on a repeated import. |
+| S6 | DealRadar | Watched alert detection at import and idempotent delivery (D12, D13). The historical-low event is unchanged, unless P4's sub-decision chooses (ii) or (iii). In the same change, add Watched alert and qualifying episode, rewrite the Watch sentence at `docs/ubiquitous-language.md:58-59`, and add the Hide statement (§15). Add a Watched alert section to `docs/recommendation-policy.md`. | `031` | Applying the production migration; documentation of a changed domain meaning (Watch) | Table-driven tests from D12, including the #72 §9 sequence, retries, Hidden products, threshold change, and multiple monitors. Integration test of `031`. |
+| S7 | DealRadar (and an optional, separate Deals slice for P11) | Retire the per-source recommendation paths as per P4 and P7. Update `docs/recommendation-policy.md` and `docs/architecture.md`. In `docs/ubiquitous-language.md`, retire only the per-source meaning of Recommendation and the term New recommendation (§15). Representative end-to-end check (#72 DoD 20). Fresh-context review. | No | Changes recommendation behavior; documentation of changed domain meaning. Explicit approval to remove the legacy behavior. | `npm test`, `npm run lint`, `npm run build`. A review that history and evaluations are preserved. An end-to-end run with two Vinted and two Zalando monitors. |
 
 ---
 
@@ -1463,33 +1659,40 @@ Recommendation, New recommendation, watched historical-low event, Price
 change, and Scan warning.
 
 **Proposed new terms. These are flagged for review. None is in the
-ubiquitous language yet.**
+ubiquitous language yet.** Following `AGENTS.md`, each term is added to
+`docs/ubiquitous-language.md` in the same slice that first uses it in code,
+documentation, or Slack.
 
-| Term | Proposed meaning |
-| --- | --- |
-| **Monitor** | A configured search in Deals, identified by a stable monitor ID. It is already shown in the dashboard filter (`app/dashboard-filter-bar.tsx:154-164`) but is not defined. |
-| **Monitor definition** | The recommendation-relevant part of a monitor as published by Deals and persisted by DealRadar (D2, D4). |
-| **Active monitor** | Enabled, not removed, and with a recommendation strategy (D4). |
-| **Recommendation strategy** | `discount_threshold` or `best_match` (D1). |
-| **Qualifying product** | A fresh, visible member of an active monitor that meets that monitor's strategy (D6–D8). |
-| **Best match** | The highest-ranked qualifying product of one monitor. *Conflict:* the dashboard sort `best_match` means rounded-Overall ordering (§10). The reviewer should confirm the shared name or pick a different one. |
-| **Discount** | The producer's `discount_percent`, used only when reliable (D8). Today "discount percentage" is used only as evidence for the Deal score. |
-| **Daily summary** | The once-per-day Slack message with one best match per active monitor (D11). |
-| **Watched alert** and **qualifying episode** | The event-based notification for a Watched product, and the run of consecutive qualifying observations (D12). |
-| **Fresh** (product or monitor) | Freshness as defined in D7. It is distinct from the dashboard's 24h/7d filter. |
+| Term | Proposed meaning | Added to the ubiquitous language in |
+| --- | --- | --- |
+| **Monitor** | A configured search in Deals, identified by a stable monitor ID. It is already shown in the dashboard filter (`app/dashboard-filter-bar.tsx:154-164`) but is not defined. | S3a |
+| **Monitor definition** | The recommendation-relevant part of a monitor as published by Deals and persisted by DealRadar (D2, D4). | S3a |
+| **Active monitor** | Enabled, not removed, and with a recommendation strategy (D4). | S3a |
+| **Recommendation strategy** | `discount_threshold` or `best_match` (D1). | S3a |
+| **Qualifying product** | A fresh, visible member of an active monitor that meets that monitor's strategy (D6–D8). | S5 |
+| **Best match** | The highest-ranked qualifying product of one monitor. *Conflict:* the dashboard sort `best_match` means rounded-Overall ordering (§10). The reviewer should confirm the shared name or pick a different one. | S5 |
+| **Discount** | The producer's `discount_percent`, used only when reliable (D8). Today "discount percentage" is used only as evidence for the Deal score. | S5 |
+| **Daily summary** | The once-per-day Slack message with one best match per active monitor (D11). | S5 |
+| **Watched alert** and **qualifying episode** | The event-based notification for a Watched product, and the run of consecutive qualifying observations (D12). | S6 |
+| **Fresh** (product or monitor) | Freshness as defined in D7. It is distinct from the dashboard's 24h/7d filter. | S5 |
 
-**Proposed changes of meaning. These are flagged for review and take
-effect only in S7, with document updates.**
+**Proposed changes of meaning. These are flagged for review. Each one is
+documented in the slice that makes it true.**
 
-- **Recommendation.** Changes from "at most one per source per import" to
-  "at most one best match per active monitor per daily summary". Watched
-  alerts become a separate concept instead of a recommendation priority.
-- **New recommendation.** Retired once the per-import recommendation paths
-  are removed.
-- **Watch.** The sentence "This does not change … the absence of
-  target-price alerts" stops being true when Watched alerts ship (S6). The
-  Watch entry must then describe Watched alerts. Watched state itself stays
-  independent of monitor configuration.
-- **Hide.** Unchanged. It is extended to say explicitly that Hidden
-  products cause no Watched alerts. This is consistent with "excluded from
-  product recommendation selection".
+- **Recommendation (S5, then S7).**
+  - In S5 the Recommendation entry gains a note: during the parallel run
+    there are two forms, the per-source import recommendation (unchanged)
+    and the per-monitor best match in the daily summary.
+  - In S7 the meaning changes from "at most one per source per import" to
+    "at most one best match per active monitor per daily summary".
+- **New recommendation (S7).** Retired in S7, when the per-import
+  recommendation paths are removed. It is unchanged before that.
+- **Watch (S6).** The sentence "This does not change … the absence of
+  target-price alerts" (`docs/ubiquitous-language.md:58-59`) stops being
+  true when Watched alerts ship. S6 must therefore update the Watch entry to
+  describe Watched alerts. Watched state itself stays independent of
+  monitor configuration. Any further Watch change from P4 (the role of the
+  historical-low event) is made in the slice that applies P4.
+- **Hide (S6).** Unchanged in meaning. S6 adds an explicit statement that
+  Hidden products cause no Watched alerts. This is consistent with
+  "excluded from product recommendation selection".
