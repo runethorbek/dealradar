@@ -923,16 +923,36 @@ observation *o* when all of these hold:
    *M*'s threshold **at detection time**.
 5. The transition rule holds. This rule is open decision
    [P1](#p1-watched-alert-transition-policy). Recommended: either
-   - (i) **crossing**: the previous observation, meaning the latest earlier
-     snapshot with a reliable discount, did not meet *T*; or
+   - (i) **crossing**: the previous **priced** observation did not meet
+     *T*; or
    - (ii) **new best in episode**: ⌊*d(o)*⌋ is above the highest ⌊*d*⌋
      **observed** in the current **qualifying episode** before *o*.
 
+   For transitions, each earlier snapshot is read like this:
+   - **Priced, with a reliable discount (D8):** that discount is used.
+   - **Priced, with a null discount:** treated as **0%**. A non-null
+     `current_price` and `currency` with a null `discount_percent` is a
+     product back at full price (`no-discount-found`;
+     `deals/scripts/lib/zalando-price.ts:104-106`, `:131-139`). 0% is below
+     every valid *T*, so it ends an episode.
+   - **Skipped:** snapshots with no price (`current_price` or `currency`
+     null, which includes `explicit-discount-no-price`) and snapshots with an
+     out-of-range discount. They carry no usable evidence either way.
+
    A qualifying episode (proposed term) is the run of consecutive earlier
-   observations of *p* that have a reliable discount at or above *T*,
-   ending just before *o*. Observations without a reliable discount are
-   skipped, and the first observation below *T* ends the run. An observation
-   below *T* therefore re-arms the monitor.
+   priced observations of *p* at or above *T*, ending just before *o*.
+   Skipped snapshots do not end it. The first priced observation below *T*,
+   including a full-price one, ends the run and re-arms the monitor.
+
+   For example: 25% (alerted) → full price (0%) → 25% alerts again, because
+   the full-price observation ended the episode and 25% is a new crossing.
+
+   **No earlier priced observation.** If *p* has no earlier priced
+   observation, neither (i) nor (ii) fires, so there is no alert. *o* starts
+   the episode and becomes its baseline. This is the same rule as the
+   watched historical-low event ("a product's first observation never
+   qualifies"). It also agrees with the history-based baseline recommended
+   in P6(a). Under P6(b) this case would alert instead.
 
    - **Baseline.** The baseline is the highest discount **observed**, not the
      highest discount alerted. Every alerted discount was also observed, so
@@ -971,7 +991,7 @@ Lifecycle (Proposed; marked where a product decision applies):
 | Product in several monitors | Detected per monitor and delivered as one message per product (D10). |
 | Monitor changes its threshold | *T* at detection time is applied to both *o* and the previous observation. A product already above a lowered threshold does not alert until a new best. Raising the threshold can end an episode. Each alert row stores the *T* it used. |
 | Monitor disabled or removed | Not active, so no alerts. |
-| Price falls and later recovers | Falling below *T* ends the episode. A later crossing alerts again. |
+| Price falls and later recovers | Falling below *T* ends the episode, and that includes returning to full price (a null discount with a price counts as 0%). A later crossing alerts again. |
 | Repeated identical observations | Same `observed_at`: no snapshot, no event. New `observed_at` with the same discount: no crossing and no new best, so no alert. |
 | Failed Slack notification | The alert row stays pending. It is retried by the next delivery attempt under a claim. The triggers are in D13 "Delivery and retry", and the late-delivery choice is P5. |
 | Import retries | Same ref, no inserted snapshot, no detection. Alert rows are unique per (*p*, *M*, snapshot). |
@@ -1068,6 +1088,33 @@ therefore separates them:
   in the application code (ADR 0001). If every retry fails, the run's
   workflow ends failed after evaluation and the legacy message are already
   complete. The summary row stays unsent.
+- **Dependency on finalization.** The workflow runs its steps in order
+  (`workflows/evaluation-run-orchestration.ts:33-38`, **Verified**). If
+  `finalizeEvaluationRunStep` still throws after its retries,
+  `deliverDailyNotificationsStep` never runs. That day has no daily summary,
+  and no catch-up delivery of pending Watched alerts from this run, unless
+  another import runs on the same date (risk R7, decision P5).
+- **Summary date (QA).** The import route computes the Europe/Copenhagen
+  date once, when the import starts, using the date choice in P5. It stores
+  that date with the evaluation run, inside the existing `import_summary`
+  JSONB (`migrations/017_evaluation_run_finalization.sql`), so no migration
+  is needed. It does this through `createEvaluationRun`, so the
+  workflow step reads it from Postgres. That also covers resumed launches,
+  which receive only the run ID (`workflows/evaluation-run-orchestration.ts`,
+  `resumePendingEvaluationRunWorkflows`). The no-candidate path passes the
+  date directly. Neither step retries nor a run that finishes after
+  midnight can change the date the summary belongs to.
+- **Order inside `deliverDailyNotificationsStep` (QB).**
+  1. Produce and send the daily summary for the passed date.
+  2. Deliver pending Watched alerts.
+
+  Both are always attempted. A failure in one is recorded and does not skip
+  the other. The step throws at the end if either failed, so the step retry
+  tries again. Retries are idempotent: a sent summary or alert is not sent
+  again because of its claim and mark-sent state. A Watched alert that keeps
+  failing therefore cannot prevent the summary from being attempted. The
+  no-candidate path uses the same order, with each part in its own
+  `try/catch`.
 - **Daily summary, no-candidate path.** The import route calls
   `produceDailySummary(date)` after the legacy message, in a `try/catch`.
   A failure is logged and does not fail the import, which matches today's
@@ -1335,8 +1382,13 @@ Scan warnings: Vinted 5/6 pages succeeded
   seen. This is a scraping concern.
 - **R9. Duplicate notifications during transition.** Until P4 is applied,
   one Watched Zalando price drop could cause both a historical-low entry in
-  the per-import message and a Watched alert. How to handle this is a
-  sub-decision of [P4](#p4-fate-of-the-watched-historical-low-event).
+  the per-import message and a Watched alert. When the original price is
+  unchanged, a new low and a rising discount coincide, so this is expected
+  to be common rather than rare. #72 §9 and DoD 14 require avoiding it. The
+  handling is a sub-decision of
+  [P4](#p4-fate-of-the-watched-historical-low-event). The recommendation is
+  (ii): suppress the Watched alert for that observation and leave legacy
+  output unchanged.
 - **R10. Evaluation staleness.** The Deal score is computed at evaluation
   time. If the price changes and the product is not selected again (limit),
   the stored Deal score is stale ([P9](#p9-evaluation-staleness)).
@@ -1427,15 +1479,25 @@ reviewer.
 - Sub-decision: duplicates during the transition (R9). Between S6 and the
   application of P4, one Watched Zalando price drop can appear both as a
   historical-low entry in the per-import message and as a Watched alert.
-  - (i) Accept the overlap for the observation period.
-  - (ii) Have S6 suppress a Watched alert when the same product and
-    observation already has a watched historical-low event. S6 then reads
-    the events the import detected.
+  - The overlap is likely to be common. When a Watched Zalando product's
+    original price is unchanged, a new low price and a rising discount are
+    the same buying opportunity, so both events fire on the same
+    observation.
+  - (i) Accept the overlap for the observation period. This conflicts with
+    #72 §9 ("avoid two mechanisms generating duplicate notifications for
+    the same buying opportunity") and #72 DoD 14.
+  - (ii) Have S6 suppress a new Watched alert when the import detected a
+    watched historical-low event for the same product and observation.
+    Both are detected in the same import, so S6 reads the events
+    `findWatchedHistoricalLows` returned (`app/api/import-deals/route.ts:386-400`).
+    Legacy output is unchanged. Caveat: if several events exist, the
+    per-import message shows only the strongest one, so a suppressed alert
+    for a weaker one is not shown anywhere until P4 is applied.
   - (iii) Apply P4(c) inside S6, so the merge ships with Watched alerts.
-  - **Recommendation:** (i), because the overlap is rare (it needs a Watched
-    Zalando product with both a threshold event and a historical low in the
-    same observation) and it keeps S6 independent of the legacy path. Choose
-    (ii) if duplicates are not acceptable at all.
+    This changes legacy output before Phase 7.
+  - **Recommendation:** (ii). It meets #72 §9 and DoD 14 without changing
+    the legacy recommendation path. The caveat is limited to the period
+    before P4 is applied.
 
 ### P5. Daily summary date, send time, and fallback trigger
 
