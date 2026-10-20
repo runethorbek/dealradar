@@ -870,7 +870,9 @@ retry".
 The daily import is already the daily scheduled job (2.1). Triggering there
 means the day's evaluations are complete, and no new scheduler, endpoint,
 secret, or environment variable is needed. The first import that completes
-on a summary date produces the summary. Later imports that day do nothing.
+on a summary date produces the summary. Once it has been sent, later imports
+that day do nothing. An unsent summary is retried by later imports on the
+same date (D13).
 
 A time-based fallback (Vercel Cron) for days when the import fails or hangs
 is open decision
@@ -931,10 +933,18 @@ observation *o* when all of these hold:
    For transitions, each earlier snapshot is read like this:
    - **Priced, with a reliable discount (D8):** that discount is used.
    - **Priced, with a null discount:** treated as **0%**. A non-null
-     `current_price` and `currency` with a null `discount_percent` is a
-     product back at full price (`no-discount-found`;
-     `deals/scripts/lib/zalando-price.ts:104-106`, `:131-139`). 0% is below
-     every valid *T*, so it ends an episode.
+     `current_price` and `currency` with a null `discount_percent` means **no
+     discount was detected** (`no-discount-found`). That is not verified
+     full price. The status also covers several other cards:
+     - an `Oprindeligt` price at or below the current price
+       (`deals/scripts/lib/zalando-price.ts:98`);
+     - a `Sidste laveste pris` card without an original-price label, where
+       the explicit percentage is ignored (`:104-106`;
+       `deals/test/zalando-price.test.ts:55-60`);
+     - cards whose labels did not parse (`:131-139`).
+
+     0% is below every valid *T*, so it ends an episode. The trade-off is
+     risk R12.
    - **Skipped:** snapshots with no price (`current_price` or `currency`
      null, which includes `explicit-discount-no-price`) and snapshots with an
      out-of-range discount. They carry no usable evidence either way.
@@ -942,10 +952,12 @@ observation *o* when all of these hold:
    A qualifying episode (proposed term) is the run of consecutive earlier
    priced observations of *p* at or above *T*, ending just before *o*.
    Skipped snapshots do not end it. The first priced observation below *T*,
-   including a full-price one, ends the run and re-arms the monitor.
+   including one with no detected discount, ends the run and re-arms the
+   monitor.
 
-   For example: 25% (alerted) → full price (0%) → 25% alerts again, because
-   the full-price observation ended the episode and 25% is a new crossing.
+   For example: 25% (alerted) → no discount detected (0%) → 25% alerts
+   again, because the 0% observation ended the episode and 25% is a new
+   crossing.
 
    **No earlier priced observation.** If *p* has no earlier priced
    observation, neither (i) nor (ii) fires, so there is no alert. *o* starts
@@ -987,11 +999,11 @@ Lifecycle (Proposed; marked where a product decision applies):
 | --- | --- |
 | Product becomes Watched after already crossing | No alert for the existing state. The crossing is judged against stored history, which exists before Watch. The next new best alerts. The decision is [P6](#p6-alert-baseline-already-qualifying-products-and-go-live). |
 | Product becomes Hidden | No alerts while Hidden. Unhide does not alert by itself (`docs/ubiquitous-language.md`, Unhide). |
-| Product becomes unavailable | It is not observed, so there is no event. When it reappears, it is compared with its previous reliable observation. |
+| Product becomes unavailable | It is not observed, so there is no event. When it reappears, it is compared with its previous priced observation (D12). |
 | Product in several monitors | Detected per monitor and delivered as one message per product (D10). |
 | Monitor changes its threshold | *T* at detection time is applied to both *o* and the previous observation. A product already above a lowered threshold does not alert until a new best. Raising the threshold can end an episode. Each alert row stores the *T* it used. |
 | Monitor disabled or removed | Not active, so no alerts. |
-| Price falls and later recovers | Falling below *T* ends the episode, and that includes returning to full price (a null discount with a price counts as 0%). A later crossing alerts again. |
+| Price falls and later recovers | Falling below *T* ends the episode, and that includes an observation with no detected discount (a null discount with a price counts as 0%; see R12). A later crossing alerts again. |
 | Repeated identical observations | Same `observed_at`: no snapshot, no event. New `observed_at` with the same discount: no crossing and no new best, so no alert. |
 | Failed Slack notification | The alert row stays pending. It is retried by the next delivery attempt under a claim. The triggers are in D13 "Delivery and retry", and the late-delivery choice is P5. |
 | Import retries | Same ref, no inserted snapshot, no detection. Alert rows are unique per (*p*, *M*, snapshot). |
@@ -1402,6 +1414,19 @@ Scan warnings: Vinted 5/6 pages succeeded
   DealRadar cannot tell them apart without new producer information. D8
   treats both as reliable. Whether inferred-pair discounts may qualify is
   open decision [P13](#p13-inferred-pair-discounts).
+- **R12. "No discount detected" ends episodes.** D12 treats a priced
+  observation with a null discount as 0%, which ends the episode.
+  - **Regressions.** A Deals parser regression, or a Zalando layout change
+    that drops discounts for one scan, would end every open episode. The
+    next correct scan would then re-alert every Watched product above its
+    threshold. Skipping these observations instead would avoid that, but
+    then a real return to full price would never re-arm the monitor.
+  - **Open question.** It is not known whether a card can switch between
+    the `Oprindeligt` display and a `Sidste laveste pris`-only display from
+    one scan to the next. If it can, the same false re-alerts would happen
+    in normal operation. Answering this needs production snapshot data or
+    an answer from the product owner.
+  - The choice is a sub-point of [P1](#p1-watched-alert-transition-policy).
 
 ---
 
@@ -1442,6 +1467,17 @@ reviewer.
   comparison suppresses 0.1-point noise.
 - Also to confirm: a threshold change applies to history as described in
   D12, so a lowered threshold does not alert on an unchanged discount.
+- Sub-point: priced observations with no detected discount (R12).
+  - (i) Treat them as 0%, which ends the episode. This is D12 as written. A
+    real return to full price re-arms the monitor, but a one-scan parser or
+    layout regression re-alerts every Watched product above its threshold.
+  - (ii) Skip them. A regression causes no false alerts, but a real return
+    to full price never re-arms the monitor.
+  - (iii) Treat them as 0% only after two consecutive scans with no
+    detected discount. This filters one-scan glitches but adds a rule.
+  - **Recommendation:** (i) for v1, and revisit it once production data
+    answers the R12 open question. Choose (iii) if display switching turns
+    out to be common.
 
 ### P2. Qualifying products without a Gemini evaluation
 
@@ -1493,6 +1529,12 @@ reviewer.
     Legacy output is unchanged. Caveat: if several events exist, the
     per-import message shows only the strongest one, so a suppressed alert
     for a weaker one is not shown anywhere until P4 is applied.
+    A suppressed opportunity also depends on the legacy per-import message
+    and its weaker delivery guarantees. In the no-candidate path that message
+    is sent once, and failures are only logged
+    (`app/api/import-deals/route.ts:449-454`). In the evaluation path it is
+    sent only after finalization. It does not get the claim-and-retry
+    delivery of D13.
   - (iii) Apply P4(c) inside S6, so the merge ships with Watched alerts.
     This changes legacy output before Phase 7.
   - **Recommendation:** (ii). It meets #72 §9 and DoD 14 without changing
@@ -1678,7 +1720,7 @@ commit, push, and merge.
 | S3b | DealRadar | `products.monitor_ids` filled by the importer and backfilled (D5). Readers unchanged. Update `docs/import-contract.md` (membership becomes authoritative). | `029` | Applying the production migration; import semantics change for `monitor_ids` | Unit tests for validation and overwrite. Integration test for the backfill and round trip. After deploy, compare the column with `raw_data` for a sample. |
 | S4 | DealRadar | Pure policy module (D6–D10) and a read-only loader. Not wired to Slack. | No | None (no behavior change). The policy follows approved P2, P3, P8, and P9. | Unit tests for qualification, counts, ranking, ties, freshness, and unevaluated or Hidden products. Integration test for the loader query. |
 | S5 | DealRadar | Daily summary operation, formatter, and idempotent delivery. Triggered by a new Workflow step after finalization, or by the no-candidate path (D11, D13). The legacy message is unchanged. In the same change, add Qualifying product, Best match, Discount, Daily summary, and Fresh to `docs/ubiquitous-language.md`, plus the parallel-run note on Recommendation (§15). Add a daily summary section to `docs/recommendation-policy.md`. | `030` | Applying the production migration; documentation of new domain terms. A cron fallback, if P5(b) is chosen, also needs approval for the environment and secret. | Unit tests for the formatter and the claim, retry, and same-date paths. Integration test of `030`. Production smoke test: exactly one summary on the first import of a day, and none on a repeated import. |
-| S6 | DealRadar | Watched alert detection at import and idempotent delivery (D12, D13). The historical-low event is unchanged, unless P4's sub-decision chooses (ii) or (iii). In the same change, add Watched alert and qualifying episode, rewrite the Watch sentence at `docs/ubiquitous-language.md:58-59`, and add the Hide statement (§15). Add a Watched alert section to `docs/recommendation-policy.md`. | `031` | Applying the production migration; documentation of a changed domain meaning (Watch) | Table-driven tests from D12, including the #72 §9 sequence, retries, Hidden products, threshold change, and multiple monitors. Integration test of `031`. |
+| S6 | DealRadar | Watched alert detection at import and idempotent delivery (D12, D13). Watched alerts are suppressed when a historical-low event exists for the same product and observation, per P4(ii), the recommended option. The historical-low event and legacy output change only if P4(iii) is chosen. In the same change, add Watched alert and qualifying episode, rewrite the Watch sentence at `docs/ubiquitous-language.md:58-59`, and add the Hide statement (§15). Add a Watched alert section to `docs/recommendation-policy.md`. | `031` | Applying the production migration; documentation of a changed domain meaning (Watch) | Table-driven tests from D12, including the #72 §9 sequence, retries, Hidden products, threshold change, and multiple monitors. A suppression case: the same observation has a watched historical-low event, so no Watched alert is sent and the legacy output is unchanged. Integration test of `031`. |
 | S7 | DealRadar (and an optional, separate Deals slice for P11) | Retire the per-source recommendation paths as per P4 and P7. Update `docs/recommendation-policy.md` and `docs/architecture.md`. In `docs/ubiquitous-language.md`, retire only the per-source meaning of Recommendation and the term New recommendation (§15). Representative end-to-end check (#72 DoD 20). Fresh-context review. | No | Changes recommendation behavior; documentation of changed domain meaning. Explicit approval to remove the legacy behavior. | `npm test`, `npm run lint`, `npm run build`. A review that history and evaluations are preserved. An end-to-end run with two Vinted and two Zalando monitors. |
 
 ---
