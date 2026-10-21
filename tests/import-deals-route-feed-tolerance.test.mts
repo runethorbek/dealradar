@@ -316,8 +316,11 @@ test("an unknown product field is preserved unchanged in raw_data without affect
   );
 });
 
-test("an import fetches only the two feed files for the requested ref", async (t) => {
+// Since #77 the import also fetches the optional monitor definitions document,
+// once and from the same ref; no other file is fetched.
+test("an import fetches only the two feed files and the monitor definitions document for the requested ref", async (t) => {
   const expectedUrls = [
+    "https://raw.githubusercontent.com/runethorbek/deals/feature/monitor-recs/public/deals/monitor-recommendations.json",
     "https://raw.githubusercontent.com/runethorbek/deals/feature/monitor-recs/public/deals/vinted-latest.json",
     "https://raw.githubusercontent.com/runethorbek/deals/feature/monitor-recs/public/deals/zalando-latest.json",
   ];
@@ -335,7 +338,6 @@ test("an import fetches only the two feed files for the requested ref", async (t
       assert.equal(result.status, 200);
       assert.equal(result.body.ref, "feature/monitor-recs");
       assert.deepEqual([...result.fetchedUrls].sort(), expectedUrls);
-      assert.ok(result.fetchedUrls.every((url) => !url.includes("monitor-recommendations")));
     });
   }
 });

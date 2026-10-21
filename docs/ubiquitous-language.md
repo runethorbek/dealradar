@@ -150,6 +150,33 @@ recommendations again.
 The Vinted recommendation (since #58) and the Zalando fallback recommendation
 (since #60) apply this definition.
 
+## Monitor
+
+A configured search in Deals, identified by a stable monitor ID. A changed ID
+is a different monitor.
+
+## Monitor definition
+
+The recommendation-relevant part of a monitor, as published by Deals in
+`public/deals/monitor-recommendations.json` and persisted by DealRadar in
+`monitor_definitions`: source, optional display name, enabled flag, and an
+optional Recommendation strategy with its threshold. Deals owns monitor
+definitions; DealRadar does not edit them. A monitor absent from the latest
+valid document is kept as removed.
+
+## Active monitor
+
+A monitor definition that is enabled, not removed, and has a Recommendation
+strategy. A monitor without a strategy is unconfigured and is not active.
+
+## Recommendation strategy
+
+How a monitor's products qualify for a monitor recommendation:
+`discount_threshold` (with a minimum discount percent; Zalando only) or
+`best_match` (with a minimum Overall score). No strategy is inferred when a
+monitor has none. Recommendation strategies are persisted but do not yet
+change recommendation selection.
+
 ## Price change
 
 A change in the observed current price compared with the previously stored

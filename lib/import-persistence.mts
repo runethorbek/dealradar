@@ -1,4 +1,8 @@
 import type { ImportEvaluationResult } from "@/lib/import-evaluation.mts";
+import {
+  buildMonitorPersistenceQueries,
+  type MonitorPersistence,
+} from "@/lib/monitor-definitions.mts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -210,14 +214,21 @@ export function buildProductUpsertQuery(
   `;
 }
 
+// Monitor definitions and scan evidence (#77) are written in the same
+// transaction as products and snapshots, so they commit or roll back together.
 export async function persistImportedProducts(
   sql: ImportPersistenceSql,
   products: NormalizedProduct[],
+  monitors?: MonitorPersistence,
 ): Promise<ImportResult[]> {
-  const queries = products.map((product) => buildProductUpsertQuery(sql, product));
+  const productQueries = products.map((product) => buildProductUpsertQuery(sql, product));
+  const queries = [
+    ...productQueries,
+    ...(monitors ? buildMonitorPersistenceQueries(sql, monitors) : []),
+  ];
   const results = queries.length ? await sql.transaction(queries) : [];
 
-  return results.flatMap((result) =>
+  return results.slice(0, productQueries.length).flatMap((result) =>
     result[0] ? [result[0] as ImportResult] : [],
   );
 }
