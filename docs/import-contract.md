@@ -96,6 +96,69 @@ Diagnostic strings are untrusted external text. They must be sanitized before
 rendering and must never expose credentials, API keys, authorization headers,
 or access tokens.
 
+## Monitor definitions
+
+Since #77 the importer also reads Deals' optional monitor definitions
+document:
+
+```text
+public/deals/monitor-recommendations.json
+```
+
+It is fetched once per import, from the same exact ref as the feeds, after the
+feeds have been validated. Deals owns the document and its field meanings
+(`deals/docs/output-contract.md`); the design is in
+`docs/specs/monitor-recommendation-design.md` (D1–D4). DealRadar supports
+`contract_version` 1.
+
+The document is optional enrichment. No problem with it fails the product
+import:
+
+| Situation | DealRadar behavior |
+| --- | --- |
+| HTTP 404 (older Deals ref without the document) | Stored definitions unchanged. No warning. |
+| Other HTTP failure or network error | Stored definitions unchanged. Warning. |
+| Unknown `contract_version` | Document ignored, stored definitions unchanged. Warning. |
+| Invalid document | The whole document is rejected and nothing from it is written. Warning. |
+| Valid document | Every listed monitor is inserted or updated in place, and `removed_at` is cleared if it was set. A stored monitor absent from the document keeps its row and gets `removed_at` (the first removal time is kept). |
+
+A document is invalid when it is not JSON, `monitor_count` does not equal
+`monitors.length`, a monitor ID is invalid or duplicated, or any monitor is
+invalid: `source` must be `vinted` or `zalando` (mapped to `vinted.com` and
+`zalando.dk`), `enabled` must be a boolean, `display_name` is absent, `null`,
+or a trimmed string of 1–80 characters, and `recommendation` must be present
+as `null` (unconfigured) or one of:
+
+- `{ "strategy": "discount_threshold", "minimum_discount_percent": <integer 1–99> }`,
+  Zalando only;
+- `{ "strategy": "best_match", "minimum_overall_score": <number 0–10, at most one decimal> }`.
+
+Unknown keys are ignored at the document and monitor level and rejected inside
+`recommendation`. The order of `monitors` is not checked.
+
+Definitions are stored in `monitor_definitions` (migration `028`), written in
+the same transaction as products and snapshots. `definition` keeps the
+published monitor object and `definition_ref` the import ref it came from.
+The latest import is the truth: a valid document from an older ref replaces
+the stored definitions, and `definition_ref` records that ref.
+
+Scan evidence comes from each feed's existing `monitors[]` and `checked_at`.
+For every monitor ID listed there, an existing definition of that feed's
+source gets `last_scan_checked_at = GREATEST(stored, checked_at)`, and
+`last_scan_ref` is set to the import ref only when that timestamp advances, so
+an older ref never moves either value backwards. Scan evidence never creates a
+definition. Like `scan_status`, it is parsed leniently: an unparsable
+`checked_at` or a malformed `monitors[]` entry is ignored.
+
+Warnings are logged and returned in the import response under
+`monitorDefinitions`, together with the `status` (`applied`, `not_published`,
+`unavailable`, `unsupported_version`, or `rejected`), the number of
+definitions applied, and `productMonitorIdsWithoutDefinition`: the number of
+distinct valid product `monitor_ids` in the import that have no
+`monitor_definitions` row (`null` if the lookup failed). They are not sent to
+Slack. Recommendation selection, Slack messages, and Gemini evaluation do not
+use monitor definitions yet.
+
 ## Compatibility process
 
 Before changing importer behavior:

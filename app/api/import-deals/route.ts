@@ -7,6 +7,14 @@ import {
   type ImportPersistenceSql,
   type NormalizedProduct,
 } from "@/lib/import-persistence.mts";
+import {
+  collectMonitorScanEvidence,
+  collectProductMonitorIds,
+  countMonitorIdsWithoutDefinition,
+  loadDefinedMonitorIds,
+  loadMonitorDefinitions,
+  monitorDefinitionsFileName,
+} from "@/lib/monitor-definitions.mts";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
 import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-settings.mts";
@@ -358,6 +366,18 @@ export async function POST(request: Request) {
       (total, result) => total + result.productsSkippedInvalidPrice,
       0,
     );
+    // The optional monitor definitions document is fetched once, from the same
+    // ref as the feeds, after the feeds are valid. No outcome fails the import.
+    const monitorDefinitions = await loadMonitorDefinitions(
+      (url) => fetch(url, { cache: "no-store" }),
+      `${repositoryUrl}/${ref}/public/deals/${monitorDefinitionsFileName}`,
+    );
+    if (monitorDefinitions.warning) {
+      console.warn(`DealRadar monitor definitions ${monitorDefinitions.status}: ${monitorDefinitions.warning}.`);
+    }
+    const scanEvidence = validatedPayloads.flatMap((payload, index) =>
+      collectMonitorScanEvidence(sources[index].expectedSite, payload),
+    );
     const sql = neon(databaseUrl);
 
     // neon()'s `transaction()` overload set is more specific than the
@@ -367,7 +387,23 @@ export async function POST(request: Request) {
     const importResults = await persistImportedProducts(
       sql as unknown as ImportPersistenceSql,
       products,
+      { ref, document: monitorDefinitions.document, scanEvidence },
     );
+    // Diagnostic only: product monitor IDs with no stored definition. A lookup
+    // failure leaves the count unknown instead of failing the import.
+    const productMonitorIds = collectProductMonitorIds(products);
+    let productMonitorIdsWithoutDefinition: number | null = 0;
+    if (productMonitorIds.size > 0) {
+      try {
+        productMonitorIdsWithoutDefinition = countMonitorIdsWithoutDefinition(
+          productMonitorIds,
+          await loadDefinedMonitorIds(sql),
+        );
+      } catch {
+        productMonitorIdsWithoutDefinition = null;
+        console.warn("DealRadar monitor definition lookup failed.");
+      }
+    }
     const productsInserted = importResults.filter(
       (result) => result.inserted,
     ).length;
@@ -467,6 +503,12 @@ export async function POST(request: Request) {
       productsSkippedInvalidPrice,
       evaluationMetrics,
       preselectionMetrics: preselection.metrics,
+      monitorDefinitions: {
+        status: monitorDefinitions.status,
+        monitorsApplied: monitorDefinitions.document?.definitions.length ?? 0,
+        warning: monitorDefinitions.warning,
+        productMonitorIdsWithoutDefinition,
+      },
     });
   } catch (error) {
     console.error("[durable-import] import failed", { ref, error });

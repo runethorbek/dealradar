@@ -12,6 +12,12 @@ import {
 } from "@/lib/import-persistence.mts";
 import { getLatestDashboardProducts, type DashboardSql } from "@/lib/dashboard-product-query.mts";
 import { findWatchedHistoricalLows, loadWatchedHistoricalLowCandidates } from "@/lib/watched-historical-low.mts";
+import {
+  loadDefinedMonitorIds,
+  parseMonitorDefinitionsDocument,
+  type MonitorDefinitionsDocument,
+  type MonitorScanEvidence,
+} from "@/lib/monitor-definitions.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
@@ -188,4 +194,163 @@ test("detects a watched historical-low event from real snapshot history", async 
   await sql`UPDATE products SET hidden = TRUE WHERE id = ${first.productId}`;
   const hiddenLow = await observe(100, "2026-01-06T00:00:00.000Z");
   assert.deepEqual(await eventsFor(hiddenLow.snapshotId), [], "hidden products are excluded");
+});
+
+function monitorDocument(monitors: Array<Record<string, unknown>>): MonitorDefinitionsDocument {
+  const result = parseMonitorDefinitionsDocument({ contract_version: 1, monitor_count: monitors.length, monitors });
+  assert.ok(result.ok);
+  return result.document;
+}
+
+const scarossoMonitor = {
+  id: "zalando-scarosso-shoes-42",
+  source: "zalando",
+  display_name: "Zalando – Scarosso shoes",
+  enabled: true,
+  recommendation: { strategy: "discount_threshold", minimum_discount_percent: 20 },
+};
+const blazersMonitor = {
+  id: "vinted-mens-blazers-size-s",
+  source: "vinted",
+  display_name: "Vinted – blazers",
+  enabled: true,
+  recommendation: { strategy: "best_match", minimum_overall_score: 7 },
+};
+
+async function monitorRows() {
+  return sql`
+    SELECT
+      monitor_id, source, display_name, enabled, strategy,
+      minimum_discount_percent::TEXT AS minimum_discount_percent,
+      minimum_overall_score::TEXT AS minimum_overall_score,
+      contract_version, definition, definition_ref,
+      first_seen_at, updated_at, removed_at,
+      last_scan_checked_at, last_scan_ref
+    FROM monitor_definitions
+    ORDER BY monitor_id
+  `;
+}
+
+test("applies migration 028 and round-trips monitor definitions, lifecycle, and scan evidence", async () => {
+  const persist = (ref: string, document: MonitorDefinitionsDocument | null, scanEvidence: MonitorScanEvidence[] = []) =>
+    persistImportedProducts(importSql, [], { ref, document, scanEvidence });
+
+  await persist("ref-1", monitorDocument([blazersMonitor, scarossoMonitor]), [
+    { monitorId: "zalando-scarosso-shoes-42", source: "zalando.dk", checkedAt: "2026-10-20T03:40:00.000Z" },
+    // Evidence never creates a definition, and never crosses sources.
+    { monitorId: "unknown-monitor", source: "zalando.dk", checkedAt: "2026-10-20T03:40:00.000Z" },
+    { monitorId: "vinted-mens-blazers-size-s", source: "zalando.dk", checkedAt: "2026-10-20T03:40:00.000Z" },
+  ]);
+
+  const initialRows = await monitorRows();
+  assert.equal(initialRows.length, 2);
+  let [blazers, scarosso] = initialRows;
+  assert.equal(blazers!.source, "vinted.com");
+  assert.equal(blazers!.strategy, "best_match");
+  assert.equal(blazers!.minimum_overall_score, "7.00");
+  assert.equal(blazers!.minimum_discount_percent, null);
+  assert.equal(blazers!.last_scan_checked_at, null);
+  assert.deepEqual(blazers!.definition, blazersMonitor);
+  assert.equal(scarosso!.source, "zalando.dk");
+  assert.equal(scarosso!.display_name, "Zalando – Scarosso shoes");
+  assert.equal(scarosso!.enabled, true);
+  assert.equal(scarosso!.strategy, "discount_threshold");
+  assert.equal(scarosso!.minimum_discount_percent, "20.00");
+  assert.equal(scarosso!.minimum_overall_score, null);
+  assert.equal(scarosso!.contract_version, 1);
+  assert.equal(scarosso!.definition_ref, "ref-1");
+  assert.equal(scarosso!.removed_at, null);
+  assert.equal(scarosso!.last_scan_checked_at.toISOString(), "2026-10-20T03:40:00.000Z");
+  assert.equal(scarosso!.last_scan_ref, "ref-1");
+  const firstSeenAt = scarosso!.first_seen_at.toISOString();
+  assert.deepEqual([...await loadDefinedMonitorIds(importSql)].sort(), [blazersMonitor.id, scarossoMonitor.id]);
+
+  // Absent monitor is removed; a display_name and strategy change and
+  // enabled: false are in-place updates; an older feed does not move evidence back.
+  await persist("ref-2", monitorDocument([{
+    ...scarossoMonitor,
+    display_name: "Scarosso 42",
+    enabled: false,
+    recommendation: { strategy: "best_match", minimum_overall_score: 6.5 },
+  }]), [
+    { monitorId: "zalando-scarosso-shoes-42", source: "zalando.dk", checkedAt: "2026-10-19T03:40:00.000Z" },
+  ]);
+
+  [blazers, scarosso] = await monitorRows();
+  assert.notEqual(blazers!.removed_at, null);
+  assert.equal(blazers!.definition_ref, "ref-1");
+  assert.equal(scarosso!.display_name, "Scarosso 42");
+  assert.equal(scarosso!.enabled, false);
+  assert.equal(scarosso!.strategy, "best_match");
+  assert.equal(scarosso!.minimum_overall_score, "6.50");
+  assert.equal(scarosso!.minimum_discount_percent, null);
+  assert.equal(scarosso!.definition_ref, "ref-2");
+  assert.equal(scarosso!.first_seen_at.toISOString(), firstSeenAt);
+  assert.equal(scarosso!.last_scan_checked_at.toISOString(), "2026-10-20T03:40:00.000Z");
+  assert.equal(scarosso!.last_scan_ref, "ref-1");
+  const removedAt = blazers!.removed_at.toISOString();
+
+  // A missing document changes no definition; still-absent monitors keep
+  // their original removal time; newer evidence moves forward.
+  await persist("ref-3", null, [
+    { monitorId: "zalando-scarosso-shoes-42", source: "zalando.dk", checkedAt: "2026-10-21T03:40:00.000Z" },
+  ]);
+  await persist("ref-4", monitorDocument([scarossoMonitor]));
+
+  [blazers, scarosso] = await monitorRows();
+  assert.equal(blazers!.removed_at.toISOString(), removedAt);
+  assert.equal(scarosso!.last_scan_checked_at.toISOString(), "2026-10-21T03:40:00.000Z");
+  assert.equal(scarosso!.last_scan_ref, "ref-3");
+  assert.equal(scarosso!.definition_ref, "ref-4");
+
+  // Reappearance clears removed_at; an older ref's valid document replaces
+  // the definitions and is recorded in definition_ref.
+  await persist("ref-0", monitorDocument([blazersMonitor, scarossoMonitor]));
+
+  [blazers, scarosso] = await monitorRows();
+  assert.equal(blazers!.removed_at, null);
+  assert.equal(blazers!.definition_ref, "ref-0");
+  assert.equal(scarosso!.definition_ref, "ref-0");
+
+  // Active monitors: enabled, not removed, and with a strategy.
+  await persist("ref-5", monitorDocument([
+    blazersMonitor,
+    { ...scarossoMonitor, recommendation: null },
+  ]));
+  const active = await sql`
+    SELECT monitor_id FROM monitor_definitions
+    WHERE enabled = TRUE AND removed_at IS NULL AND strategy IS NOT NULL
+  `;
+  assert.deepEqual(active.map((row) => row.monitor_id), [blazersMonitor.id]);
+});
+
+test("monitor_definitions CHECK constraints allow exactly the threshold matching the strategy", async () => {
+  const insert = (strategy: string | null, discount: number | null, score: number | null) => sql`
+    INSERT INTO monitor_definitions (
+      monitor_id, source, enabled, strategy, minimum_discount_percent, minimum_overall_score,
+      contract_version, definition, definition_ref
+    ) VALUES (
+      ${`check-${Math.random().toString(36).slice(2)}`}, 'zalando.dk', TRUE, ${strategy}, ${discount}, ${score},
+      1, '{}'::JSONB, 'ref'
+    )
+  `;
+
+  await insert(null, null, null);
+  await insert("discount_threshold", 20, null);
+  await insert("best_match", null, 7);
+
+  for (const [strategy, discount, score] of [
+    ["discount_threshold", null, null],
+    ["discount_threshold", 20, 7],
+    ["discount_threshold", null, 7],
+    ["best_match", null, null],
+    ["best_match", 20, null],
+    [null, 20, null],
+    [null, null, 7],
+    ["top_n", null, null],
+    ["discount_threshold", 100, null],
+    ["best_match", null, 11],
+  ] as const) {
+    await assert.rejects(insert(strategy, discount, score), /check constraint/i, `${strategy} ${discount} ${score}`);
+  }
 });

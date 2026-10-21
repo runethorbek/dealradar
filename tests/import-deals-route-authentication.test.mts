@@ -215,6 +215,8 @@ test("preserves the import flow for a valid bearer credential", async () => {
   reset();
   const requestedFeedUrls: string[] = [];
   globalThis.fetch = async (input) => {
+    // A Deals ref without the optional monitor definitions document (#77).
+    if (String(input).endsWith("/monitor-recommendations.json")) return new Response(null, { status: 404 });
     feedFetchCalls += 1;
     const url = String(input);
     requestedFeedUrls.push(url);
@@ -304,6 +306,12 @@ test("preserves the import flow for a valid bearer credential", async () => {
       excludedByBrand: 0,
       eligibleCandidates: 1,
       candidatesSelected: 1,
+    },
+    monitorDefinitions: {
+      status: "not_published",
+      monitorsApplied: 0,
+      warning: null,
+      productMonitorIdsWithoutDefinition: 0,
     },
   });
 });
@@ -443,6 +451,9 @@ function watchedHistoricalLowSetup(inserted: boolean) {
 
   globalThis.fetch = async (input) => {
     const url = String(input);
+
+    // A Deals ref without the optional monitor definitions document (#77).
+    if (url.endsWith("/monitor-recommendations.json")) return new Response(null, { status: 404 });
 
     if (url.includes("zalando-latest.json")) {
       return Response.json(validFeed(url, [
