@@ -14,6 +14,7 @@ import { getLatestDashboardProducts, type DashboardSql } from "@/lib/dashboard-p
 import { findWatchedHistoricalLows, loadWatchedHistoricalLowCandidates } from "@/lib/watched-historical-low.mts";
 import {
   loadDefinedMonitorIds,
+  normalizeProductMonitorIds,
   parseMonitorDefinitionsDocument,
   type MonitorDefinitionsDocument,
   type MonitorScanEvidence,
@@ -369,4 +370,117 @@ test("monitor_definitions CHECK constraints allow exactly the threshold matching
   ] as const) {
     await assert.rejects(insert(strategy, discount, score), /check constraint/i, `${strategy} ${discount} ${score}`);
   }
+});
+
+// Migration 029 (#78) must see pre-existing products, so it runs in a
+// separate database of the same container: migrations before 029, seed rows,
+// then 029.
+test("migration 029 backfills products.monitor_ids with the importer's rules and changes nothing else", async () => {
+  await sql.unsafe("CREATE DATABASE monitor_ids_backfill");
+  const url = new URL(container.getConnectionUri());
+  url.pathname = "/monitor_ids_backfill";
+  const backfillSql = postgres(url.toString(), { max: 1 });
+
+  try {
+    const files = readdirSync(migrationsDir)
+      .filter((file) => file.endsWith(".sql"))
+      .sort((a, b) => Number(a.split("_")[0]) - Number(b.split("_")[0]));
+    const migration029 = files.find((file) => file.startsWith("029_"));
+    assert.ok(migration029);
+
+    for (const file of files.filter((file) => Number(file.split("_")[0]) < 29)) {
+      await backfillSql.unsafe(readFileSync(path.join(migrationsDir, file), "utf8"));
+    }
+
+    const seeded: Record<string, unknown>[] = [
+      { monitor_ids: ["vinted-mens-coats-size-s", "vinted-mens-blazers-size-s"], listing_text: "kept" },
+      {
+        monitor_ids: [
+          "ok-1", "", " ", " padded", "Bad ID!", "double--hyphen", "trailing-", "line\n", "é-accent",
+          "\u017F", "\u212A", 7, null, true, {}, ["nested"], "x".repeat(121), "x".repeat(120), "OK-2",
+        ],
+      },
+      { monitor_ids: Array.from({ length: 25 }, (_, index) => [`Bad ${index}`, `monitor-${index}`]).flat() },
+      { monitor_ids: "vinted-mens-blazers-size-s" },
+      { monitor_ids: null },
+      { monitor_ids: { id: "vinted-mens-blazers-size-s" } },
+      { monitor_ids: [] },
+      {},
+    ];
+
+    for (const [index, rawData] of seeded.entries()) {
+      await backfillSql`
+        INSERT INTO products (source, external_url, title, current_price, currency, raw_data)
+        VALUES (
+          ${index % 2 ? "zalando.dk" : "vinted.com"},
+          ${`https://example.test/backfill-${index}`},
+          ${`Backfill ${index}`},
+          ${100 + index},
+          'DKK',
+          ${backfillSql.json(rawData as never)}
+        )
+      `;
+    }
+
+    const otherColumns = () => backfillSql`
+      SELECT to_jsonb(products) - 'monitor_ids' AS row FROM products ORDER BY id
+    `;
+    const before = await otherColumns();
+
+    await backfillSql.unsafe(readFileSync(path.join(migrationsDir, migration029), "utf8"));
+
+    assert.deepEqual(await otherColumns(), before, "no other column or row changes");
+
+    const rows = await backfillSql`SELECT raw_data, monitor_ids FROM products ORDER BY id`;
+    assert.equal(rows.length, seeded.length);
+    for (const [index, row] of rows.entries()) {
+      assert.deepEqual(row.raw_data, seeded[index]);
+      assert.deepEqual(row.monitor_ids, normalizeProductMonitorIds(seeded[index]!.monitor_ids), `row ${index}`);
+    }
+    assert.deepEqual(rows[0]!.monitor_ids, ["vinted-mens-coats-size-s", "vinted-mens-blazers-size-s"]);
+    assert.deepEqual(rows[1]!.monitor_ids, ["ok-1", "x".repeat(120), "OK-2"]);
+    assert.deepEqual(rows[2]!.monitor_ids, Array.from({ length: 20 }, (_, index) => `monitor-${index}`));
+    assert.ok(rows.slice(3).every((row) => row.monitor_ids.length === 0));
+
+    const [index] = await backfillSql`
+      SELECT indexdef FROM pg_indexes WHERE tablename = 'products' AND indexname = 'products_monitor_ids_idx'
+    `;
+    assert.match(index!.indexdef, /USING gin \(monitor_ids\)/);
+  } finally {
+    await backfillSql.end({ timeout: 5 });
+  }
+});
+
+test("every product upsert overwrites products.monitor_ids from the feed", async () => {
+  const externalUrl = "https://www.vinted.dk/items/monitor-membership";
+  const membership = async (rawData: Record<string, unknown>, observedAt: string) => {
+    await persistImportedProducts(importSql, [
+      product({ source: "vinted.com", externalUrl, title: "Membership product", observedAt, rawData }),
+    ]);
+    const [row] = await sql`
+      SELECT monitor_ids, raw_data FROM products WHERE source = 'vinted.com' AND external_url = ${externalUrl}
+    `;
+    assert.deepEqual(row!.raw_data, rawData);
+    return row!.monitor_ids;
+  };
+
+  assert.deepEqual(
+    await membership(
+      { monitor_ids: ["vinted-mens-blazers-size-s", "Bad ID!", 7, "vinted-mens-coats-size-s"] },
+      "2026-02-01T00:00:00.000Z",
+    ),
+    ["vinted-mens-blazers-size-s", "vinted-mens-coats-size-s"],
+  );
+
+  const [found] = await sql`
+    SELECT external_url FROM products WHERE monitor_ids @> ARRAY['vinted-mens-blazers-size-s']
+  `;
+  assert.equal(found?.external_url, externalUrl);
+
+  assert.deepEqual(
+    await membership({ monitor_ids: ["vinted-mens-coats-size-s"] }, "2026-02-02T00:00:00.000Z"),
+    ["vinted-mens-coats-size-s"],
+    "a monitor no longer listed by the feed is removed",
+  );
+  assert.deepEqual(await membership({}, "2026-02-03T00:00:00.000Z"), []);
 });
