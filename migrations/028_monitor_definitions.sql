@@ -7,7 +7,8 @@ BEGIN;
 --
 -- An active monitor is a row with enabled = TRUE, removed_at IS NULL, and
 -- strategy IS NOT NULL. Exactly the threshold matching strategy is set, and
--- an unconfigured monitor (strategy IS NULL) has no threshold.
+-- an unconfigured monitor (strategy IS NULL) has no threshold. The check
+-- uses IS NOT DISTINCT FROM so it is never NULL (a NULL CHECK passes).
 --
 -- last_scan_checked_at and last_scan_ref are scan evidence: the feed
 -- checked_at (and import ref) of the latest imported feed whose monitors[]
@@ -38,12 +39,12 @@ CREATE TABLE monitor_definitions (
       AND minimum_overall_score IS NULL
     )
     OR (
-      strategy = 'discount_threshold'
+      strategy IS NOT DISTINCT FROM 'discount_threshold'
       AND minimum_discount_percent IS NOT NULL
       AND minimum_overall_score IS NULL
     )
     OR (
-      strategy = 'best_match'
+      strategy IS NOT DISTINCT FROM 'best_match'
       AND minimum_overall_score IS NOT NULL
       AND minimum_discount_percent IS NULL
     )

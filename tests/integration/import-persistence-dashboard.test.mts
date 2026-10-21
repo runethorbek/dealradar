@@ -61,7 +61,23 @@ before(async () => {
     // transaction-control statements through `unsafe()` unless the client is
     // pinned to a single connection (max: 1), since a pooled connection
     // could otherwise split a transaction across sockets.
-    sql = postgres(container.getConnectionUri(), { max: 1 });
+    //
+    // Persistence SQL passes JSONB as pre-serialized JSON text
+    // (`${JSON.stringify(value)}::JSONB`), which Neon's HTTP driver sends as a
+    // text parameter. postgres.js would instead JSON-encode that string again
+    // for an inferred jsonb parameter, storing a jsonb string scalar, so text
+    // is passed through unchanged here to match Neon.
+    sql = postgres(container.getConnectionUri(), {
+      max: 1,
+      types: {
+        jsonbText: {
+          to: 3802,
+          from: [],
+          serialize: (value: unknown) => typeof value === "string" ? value : JSON.stringify(value),
+          parse: (value: string) => value,
+        },
+      },
+    });
 
     for (const migration of readMigrationsInOrder()) {
       // `unsafe()` uses the simple query protocol, which (unlike the

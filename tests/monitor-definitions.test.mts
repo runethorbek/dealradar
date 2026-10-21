@@ -111,8 +111,8 @@ test("migration 028 creates monitor_definitions additively with the D4 columns a
   // Exactly the threshold matching the strategy is set.
   const thresholdCheck = statements.slice(statements.indexOf("monitor_definitions_strategy_threshold_check"));
   assert.match(thresholdCheck, /strategy IS NULL\s+AND minimum_discount_percent IS NULL\s+AND minimum_overall_score IS NULL/);
-  assert.match(thresholdCheck, /strategy = 'discount_threshold'\s+AND minimum_discount_percent IS NOT NULL\s+AND minimum_overall_score IS NULL/);
-  assert.match(thresholdCheck, /strategy = 'best_match'\s+AND minimum_overall_score IS NOT NULL\s+AND minimum_discount_percent IS NULL/);
+  assert.match(thresholdCheck, /strategy IS NOT DISTINCT FROM 'discount_threshold'\s+AND minimum_discount_percent IS NOT NULL\s+AND minimum_overall_score IS NULL/);
+  assert.match(thresholdCheck, /strategy IS NOT DISTINCT FROM 'best_match'\s+AND minimum_overall_score IS NOT NULL\s+AND minimum_discount_percent IS NULL/);
   assert.doesNotMatch(statements, /DROP|DELETE\s+FROM|UPDATE\s+|ALTER TABLE/i);
 });
 
