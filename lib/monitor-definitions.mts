@@ -278,6 +278,19 @@ export function collectMonitorScanEvidence(source: string, payload: unknown): Mo
   return [...monitorIds].map((monitorId) => ({ monitorId, source, checkedAt: checkedAtIso }));
 }
 
+// Product-monitor membership stored in products.monitor_ids (#78, design D5).
+// Same rules as product evaluation: invalid entries are dropped without
+// failing the product, feed order is kept, and at most the first 20 valid IDs
+// are kept. A missing or non-array value is no membership. Migration 029
+// backfills with the same rules in SQL.
+const maximumProductMonitorIds = 20;
+
+export function normalizeProductMonitorIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.filter(isValidMonitorId).slice(0, maximumProductMonitorIds);
+}
+
 export function collectProductMonitorIds(products: Array<{ rawData: JsonObject }>) {
   const monitorIds = new Set<string>();
 

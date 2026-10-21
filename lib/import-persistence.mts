@@ -1,6 +1,7 @@
 import type { ImportEvaluationResult } from "@/lib/import-evaluation.mts";
 import {
   buildMonitorPersistenceQueries,
+  normalizeProductMonitorIds,
   type MonitorPersistence,
 } from "@/lib/monitor-definitions.mts";
 
@@ -41,6 +42,11 @@ export function buildProductUpsertQuery(
   sql: ImportPersistenceSql,
   product: NormalizedProduct,
 ) {
+  // Membership comes from the feed product's monitor_ids for every source and
+  // is overwritten on every upsert (#78, design D5), so a monitor no longer
+  // listed by the latest scan is removed.
+  const monitorIds = normalizeProductMonitorIds(product.rawData.monitor_ids);
+
   return sql`
     WITH existing AS MATERIALIZED (
       SELECT
@@ -70,7 +76,8 @@ export function buildProductUpsertQuery(
         brand,
         first_seen_at,
         last_seen_at,
-        raw_data
+        raw_data,
+        monitor_ids
       ) VALUES (
         ${product.source},
         ${product.externalUrl},
@@ -87,7 +94,13 @@ export function buildProductUpsertQuery(
         ${product.brand},
         ${product.observedAt},
         ${product.observedAt},
-        ${JSON.stringify(product.rawData)}::JSONB
+        ${JSON.stringify(product.rawData)}::JSONB,
+        ARRAY(
+          SELECT monitor_id
+          FROM jsonb_array_elements_text(${JSON.stringify(monitorIds)}::JSONB)
+            WITH ORDINALITY AS entry(monitor_id, position)
+          ORDER BY position
+        )
       )
       ON CONFLICT (source, external_url) DO UPDATE SET
         title = EXCLUDED.title,
@@ -102,7 +115,8 @@ export function buildProductUpsertQuery(
         available = EXCLUDED.available,
         brand = EXCLUDED.brand,
         last_seen_at = EXCLUDED.last_seen_at,
-        raw_data = EXCLUDED.raw_data
+        raw_data = EXCLUDED.raw_data,
+        monitor_ids = EXCLUDED.monitor_ids
       RETURNING
         id,
         source,

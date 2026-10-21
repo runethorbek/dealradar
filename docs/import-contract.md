@@ -46,8 +46,20 @@ listing filter currently permits DealRadar to treat the product as available.
 
 The original product object is retained as `raw_data` for diagnostics and
 future migrations. This is not a substitute for normalized application fields.
-For Vinted, evaluation may read `monitor_ids` from this preserved object as
-non-authoritative discovery context; it is not duplicated into a product field.
+
+Product `monitor_ids` is authoritative product-monitor membership, stored in
+`products.monitor_ids` (`TEXT[]`, migration `029`, #78). It means "the monitors
+that observed this product in its latest imported scan". Every product upsert,
+for every source, overwrites it from the feed product's `monitor_ids`, so a
+monitor that the latest imported entry no longer lists is no longer a member.
+It uses the same ID rules as evaluation: a string of at most 120 characters
+matching `^[a-z0-9]+(?:-[a-z0-9]+)*$` (case-insensitive). Invalid entries are
+dropped without failing the product, feed order is kept without
+de-duplication, and at most the first 20 valid IDs are kept. A missing or
+non-array `monitor_ids` stores `{}`. Migration `029` backfilled existing
+products from `raw_data -> 'monitor_ids'` with the same rules. The dashboard
+monitor filter and Vinted evaluation still read `monitor_ids` from `raw_data`
+for now; moving them to the column is a later cleanup.
 For Vinted, evaluation and display also read the specific bounded
 `listing_text`, `article_condition`, and `size_guess` fields from this
 preserved object; arbitrary `raw_data` is never passed to Gemini. Gemini's
