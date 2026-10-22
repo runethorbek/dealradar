@@ -23,6 +23,11 @@ export type EvaluationRunImportContext = {
   snapshotsInserted: number;
   scanWarnings: unknown[];
   watchedHistoricalLows?: Array<{ productId: string; dropPercent: number }>;
+  // Daily summary (#80): the Europe/Copenhagen date computed once at import
+  // start, and the import's monitor definitions warning. Stored in
+  // import_summary only when present.
+  summaryDate?: string;
+  monitorDefinitionsWarning?: string | null;
 };
 
 export type EvaluationRunCandidate = {
@@ -137,7 +142,7 @@ export async function createEvaluationRun(
   const [row] = await sql`
     WITH created_run AS (
       INSERT INTO evaluation_runs (import_ref, import_summary, scan_warnings, watched_historical_lows)
-      VALUES (${input.importRef}, ${JSON.stringify({ ref: input.importRef, productsProcessed: input.importContext?.productsProcessed ?? 0, productsInserted: input.importContext?.productsInserted ?? 0, productsUpdated: input.importContext?.productsUpdated ?? 0, snapshotsInserted: input.importContext?.snapshotsInserted ?? 0, productsEvaluated: 0 })}::JSONB, ${JSON.stringify(input.importContext?.scanWarnings ?? [])}::JSONB, ${JSON.stringify(input.importContext?.watchedHistoricalLows ?? [])}::JSONB)
+      VALUES (${input.importRef}, ${JSON.stringify({ ref: input.importRef, productsProcessed: input.importContext?.productsProcessed ?? 0, productsInserted: input.importContext?.productsInserted ?? 0, productsUpdated: input.importContext?.productsUpdated ?? 0, snapshotsInserted: input.importContext?.snapshotsInserted ?? 0, productsEvaluated: 0, ...(input.importContext?.summaryDate ? { summaryDate: input.importContext.summaryDate } : {}), ...(input.importContext?.monitorDefinitionsWarning ? { monitorDefinitionsWarning: input.importContext.monitorDefinitionsWarning } : {}) })}::JSONB, ${JSON.stringify(input.importContext?.scanWarnings ?? [])}::JSONB, ${JSON.stringify(input.importContext?.watchedHistoricalLows ?? [])}::JSONB)
       RETURNING id, import_ref, status, started_at, completed_at, notification_sent, created_at, batches_processed
     ), created_candidates AS (
       INSERT INTO evaluation_run_candidates (

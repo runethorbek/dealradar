@@ -30,6 +30,8 @@ import {
 } from "@/lib/watched-historical-low.mts";
 import { postSlackMessage } from "@/lib/slack";
 import { createEvaluationRun } from "@/lib/evaluation-runs.mts";
+import { getCopenhagenDate } from "@/lib/daily-summary.mts";
+import { deliverDailyNotifications } from "@/lib/daily-notifications.mts";
 import { resumePendingEvaluationRunWorkflows, startEvaluationRunWorkflow } from "@/workflows/evaluation-run-orchestration";
 
 export const dynamic = "force-dynamic";
@@ -309,6 +311,9 @@ async function fetchSourcePayload(
 }
 
 export async function POST(request: Request) {
+  // The daily summary date (#80, P5) is computed once, when the import starts,
+  // so a run that finishes after Copenhagen midnight keeps this import's date.
+  const summaryDate = getCopenhagenDate(new Date());
   const ingestApiKey = process.env.INGEST_API_KEY;
   const authorization = request.headers.get("authorization");
 
@@ -372,8 +377,11 @@ export async function POST(request: Request) {
       (url) => fetch(url, { cache: "no-store" }),
       `${repositoryUrl}/${ref}/public/deals/${monitorDefinitionsFileName}`,
     );
-    if (monitorDefinitions.warning) {
-      console.warn(`DealRadar monitor definitions ${monitorDefinitions.status}: ${monitorDefinitions.warning}.`);
+    const monitorDefinitionsWarning = monitorDefinitions.warning
+      ? `${monitorDefinitions.status}: ${monitorDefinitions.warning}`
+      : null;
+    if (monitorDefinitionsWarning) {
+      console.warn(`DealRadar monitor definitions ${monitorDefinitionsWarning}.`);
     }
     const scanEvidence = validatedPayloads.flatMap((payload, index) =>
       collectMonitorScanEvidence(sources[index].expectedSite, payload),
@@ -455,7 +463,7 @@ export async function POST(request: Request) {
       const evaluationRun = await createEvaluationRun(sql, {
         importRef: ref,
         candidateProductIds: evaluationCandidates.map((candidate) => candidate.productId),
-        importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings, watchedHistoricalLows },
+        importContext: { productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, scanWarnings: partialScanWarnings, watchedHistoricalLows, summaryDate, monitorDefinitionsWarning },
       });
       evaluationRunId = evaluationRun.id;
       try {
@@ -487,6 +495,14 @@ export async function POST(request: Request) {
         if (!slackResult.success) console.warn(`DealRadar Slack notification failed: ${slackResult.error}.`);
       } catch {
         console.warn("DealRadar Slack notification failed: unexpected_error.");
+      }
+      // The daily summary follows the legacy message (#80, design D13). A
+      // failure is logged and never fails the import; a later import on the
+      // same date retries it.
+      try {
+        await deliverDailyNotifications({ sql, summaryDate, postSlackMessage, monitorDefinitionsWarning, scanWarnings: partialScanWarnings });
+      } catch {
+        console.warn("DealRadar daily notifications failed.");
       }
     }
 

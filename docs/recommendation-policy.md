@@ -154,6 +154,41 @@ a product that has been hidden or unwatched since the import no longer
 qualifies, and its current stored evaluation (if any) is used for the Overall
 tie-break.
 
+## Daily summary
+
+Since #80, DealRadar also sends a **Daily summary** (design D11, D13, P5, P12
+in `docs/specs/monitor-recommendation-design.md`). It runs in parallel with the
+per-import message, which is unchanged. Terms (Active monitor, Qualifying
+product, Best match, Discount, Fresh) are defined in
+`docs/ubiquitous-language.md`.
+
+- **Content.** One entry per Active monitor, in monitor ID order: the
+  monitor's display name (or its ID when it has none), its strategy and
+  threshold, the number of Qualifying products, the number not yet evaluated,
+  and the Best match with title, price, Discount where reliable, Overall, and
+  link. When nothing qualifies, the entry says "No products qualify." A
+  monitor that is stale or never scanned states that and shows no Best match.
+  The import's monitor definitions warning and scan warnings are repeated.
+  The summary never lists every qualifying product.
+- **Selection.** `lib/monitor-recommendation.mts` (#79): each monitor on its
+  own, with the shared Hidden, Overall, display-price, and tie-break rules
+  above, over Fresh members and their stored evaluations, whatever their age.
+  The summary triggers no Gemini evaluation.
+- **Summary date.** The Europe/Copenhagen date, computed once when the import
+  starts and stored with the evaluation run (`evaluation_runs.import_summary`),
+  so step retries, resumed runs, and runs that finish after midnight keep it.
+- **Trigger.** At the end of the import pipeline: a Workflow step after the
+  evaluation-run finalizer, or, for an import with no evaluation candidates,
+  the import route after the per-import message. There is no time-based
+  fallback; a day with no completed import has no summary.
+- **Once per date.** `produceDailySummary` (`lib/daily-summary.mts`) persists
+  the content in `daily_summaries` (migration 030) before sending, claims the
+  row, sends with a client_msg_id derived from the date, and marks it sent.
+  A failed send releases the claim: the Workflow step throws so its retries
+  try again, and any later import on the same date retries it with the same
+  content. A summary is never sent after its date. Without an Active monitor
+  no summary is produced.
+
 ## Removed: Like / Not for me
 
 Like / Not for me feedback was removed in #66, following the #61

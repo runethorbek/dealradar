@@ -72,7 +72,7 @@ export function getOverallEvaluationScore(
   return computeOverallScore(preferenceScore, dealScore, preferenceWeightPercent);
 }
 
-function escapeSlackText(value: string) {
+export function escapeSlackText(value: string) {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -327,11 +327,17 @@ export function formatImportSlackMessage(
     message += formatRecommendation("Vinted", recommendations.vinted);
   }
 
+  return message + formatScanWarnings(partialScanWarnings);
+}
+
+// The "Scan warnings" block shared by the per-import message and the daily
+// summary. It is empty when there are no warnings.
+export function formatScanWarnings(partialScanWarnings: PartialScanWarning[]) {
   if (partialScanWarnings.length === 0) {
-    return message;
+    return "";
   }
 
-  message += "\n\nScan warnings:";
+  let message = "\n\nScan warnings:";
 
   for (const warning of partialScanWarnings) {
     message +=

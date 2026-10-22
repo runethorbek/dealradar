@@ -64,3 +64,22 @@ test("the Vercel adapter contains the durable orchestration directives only at i
   assert.match(source, /"use step"/);
   assert.match(source, /processEvaluationBatch/);
 });
+
+test("the daily notifications step runs after finalization, in its own step, from the run ID only", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) =>
+    readFile(new URL("../workflows/evaluation-run-orchestration.ts", import.meta.url), "utf8"),
+  );
+  const workflow = source.slice(source.indexOf("export async function processEvaluationRunWithWorkflow"));
+  const finalize = workflow.indexOf("await finalizeEvaluationRunStep(");
+  const deliver = workflow.indexOf("await deliverDailyNotificationsStep(input.databaseUrl, input.runId)");
+
+  assert.ok(finalize >= 0 && deliver > finalize, "deliverDailyNotificationsStep follows finalizeEvaluationRunStep");
+  assert.match(
+    source,
+    /async function deliverDailyNotificationsStep\(databaseUrl: string, runId: string\) \{\r?\n  "use step";\r?\n  await deliverDailyNotificationsForEvaluationRun\(/,
+  );
+  for (const file of ["../lib/daily-notifications.mts", "../lib/daily-summary.mts"]) {
+    const application = await import("node:fs/promises").then(({ readFile }) => readFile(new URL(file, import.meta.url), "utf8"));
+    assert.doesNotMatch(application, /from "(?:workflow|@vercel|@workflow)/, `${file} has no Vercel Workflow dependency`);
+  }
+});
