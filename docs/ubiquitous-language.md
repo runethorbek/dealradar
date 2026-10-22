@@ -139,6 +139,11 @@ A recommendation does not imply an instruction to purchase.
 Since #60, both the Vinted and the Zalando recommendation follow the policy.
 See "Current production paths" in `docs/recommendation-policy.md`.
 
+During the parallel run (since #80), a Recommendation has two forms: the
+per-source import recommendation above, which is unchanged, and the per-monitor
+Best match in the Daily summary. Retiring the per-source form needs explicit
+approval (design D14, Phase 7).
+
 ## New recommendation
 
 A newly imported or materially changed product that has been evaluated during
@@ -174,8 +179,50 @@ strategy. A monitor without a strategy is unconfigured and is not active.
 How a monitor's products qualify for a monitor recommendation:
 `discount_threshold` (with a minimum discount percent; Zalando only) or
 `best_match` (with a minimum Overall score). No strategy is inferred when a
-monitor has none. Recommendation strategies are persisted but do not yet
-change recommendation selection.
+monitor has none. Since #80, a monitor's strategy decides its Qualifying
+products and Best match in the Daily summary; it does not change the
+per-source import recommendation.
+
+## Qualifying product
+
+A Fresh, visible member of an Active monitor that meets that monitor's
+Recommendation strategy: for `discount_threshold`, a reliable Discount at or
+above the threshold; for `best_match`, an unrounded Overall score at or above
+the threshold. A missing evaluation is never a low score: a
+`discount_threshold` product qualifies without an evaluation and is counted as
+not yet evaluated; a `best_match` product cannot qualify until it is evaluated.
+
+## Best match
+
+The highest-ranked Qualifying product of one Active monitor: highest Overall
+score, then highest Deal score, then ascending product id, among evaluated
+Qualifying products with a displayable price. A monitor that is not Fresh has
+no Best match. A product can be the Best match of several monitors. "Best
+match" is also the name of the `best_match` Recommendation strategy and of the
+dashboard sort by rounded Overall score; the context says which is meant.
+
+## Discount
+
+The producer's `discount_percent` for a product, used for qualification only
+when it is reliable: a Zalando product, a discount above 0 and below 100, and a
+known current price and currency. DealRadar does not calculate discounts. It is
+also evidence for the Deal score.
+
+## Daily summary
+
+The once-per-day Slack message, per Europe/Copenhagen date, with one Best match
+per Active monitor, its Qualifying product and not-yet-evaluated counts, each
+monitor's freshness, and the import's monitor definition and Scan warnings. It
+is produced from persisted state after the first import of the day, at most
+once per date, and never after its date. There is no Daily summary without an
+Active monitor. It is separate from the per-import message.
+
+## Fresh
+
+A monitor is Fresh (current) when its latest imported scan is no older than 36
+hours; otherwise it is stale, or never scanned. A product is Fresh for a
+monitor when it was seen in that monitor's latest scan. Fresh is distinct from
+the dashboard's 24h/7d freshness filter.
 
 ## Price change
 

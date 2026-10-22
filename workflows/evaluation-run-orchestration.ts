@@ -4,6 +4,7 @@ import { claimEvaluationRunLaunch, createEvaluationRun, loadPendingEvaluationRun
 import { loadWorkflowBatchSize } from "../lib/evaluation-settings.mts";
 import { evaluateProduct } from "../lib/product-evaluation.ts";
 import { finalizeEvaluationRun } from "../lib/evaluation-finalization.mts";
+import { deliverDailyNotificationsForEvaluationRun } from "../lib/daily-notifications.mts";
 import { postSlackMessage } from "../lib/slack.ts";
 import { start } from "workflow/api";
 
@@ -36,6 +37,10 @@ export async function processEvaluationRunWithWorkflow(
     result = await processEvaluationBatchStep({ ...input, workflowBatchSize });
   } while (result.run.pendingCandidates > 0);
   await finalizeEvaluationRunStep(input.databaseUrl, result.run);
+  // A separate step after finalization (#80, design D13): the finalizer
+  // returns early once its message is sent, so the daily summary keeps its own
+  // step retries without resending the legacy message.
+  await deliverDailyNotificationsStep(input.databaseUrl, input.runId);
   return result;
 }
 
@@ -96,4 +101,9 @@ async function processEvaluationBatchStep(
 async function finalizeEvaluationRunStep(databaseUrl: string, run: EvaluationBatchResult["run"]) {
   "use step";
   return finalizeEvaluationRun({ sql: neon(databaseUrl), run, postSlackMessage });
+}
+
+async function deliverDailyNotificationsStep(databaseUrl: string, runId: string) {
+  "use step";
+  await deliverDailyNotificationsForEvaluationRun({ sql: neon(databaseUrl), runId, postSlackMessage });
 }

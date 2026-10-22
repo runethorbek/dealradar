@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ import {
 } from "@/lib/monitor-definitions.mts";
 import { loadActiveMonitorMembers } from "@/lib/monitor-recommendation-loader.mts";
 import { selectForMonitor } from "@/lib/monitor-recommendation.mts";
+import { produceDailySummary, type DailySummarySql } from "@/lib/daily-summary.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
@@ -612,5 +614,74 @@ test("loads active monitors with their fresh, visible members and stored evaluat
       ["loader-discount", "current", 2, 1, a],
       ["loader-never", "never_scanned", 0, 0, null],
     ],
+  );
+});
+
+test("applies migration 030: one daily summary per date, persisted before sending, sent once", async () => {
+  const summaryDate = "2026-10-22";
+  const now = new Date("2026-10-22T12:00:00.000Z");
+  const summarySql = sql as unknown as DailySummarySql;
+  const deliveries: Array<{ message: string; clientMessageId: string | undefined }> = [];
+  let failNext = true;
+  const postSlackMessage = async (message: string, clientMessageId?: string) => {
+    deliveries.push({ message, clientMessageId });
+    if (failNext) {
+      failNext = false;
+      return { success: false, error: "unavailable" };
+    }
+    return { success: true };
+  };
+  const readRow = async (date: string) => (await sql`
+    SELECT status, content, client_message_id AS "clientMessageId", claimed_at AS "claimedAt",
+      claim_token AS "claimToken", sent_at AS "sentAt"
+    FROM daily_summaries WHERE summary_date = ${date}::DATE
+  `)[0];
+  const input = { sql: summarySql, summaryDate, postSlackMessage, now, monitorDefinitionsWarning: null, scanWarnings: [] };
+
+  await assert.rejects(produceDailySummary(input), /can be retried/);
+  const pending = await readRow(summaryDate);
+  const hash = createHash("md5").update(`dealradar:daily-summary:${summaryDate}`).digest("hex");
+  assert.equal(pending?.status, "pending");
+  assert.equal(
+    pending?.clientMessageId,
+    `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`,
+    "client_message_id is derived from the date",
+  );
+  assert.equal(pending?.claimToken, null, "a failed send releases the claim");
+  assert.equal(pending?.claimedAt, null);
+  assert.equal(pending?.sentAt, null);
+  const content = pending?.content as { summaryDate: string; text: string; monitors: Array<{ monitorId: string }> };
+  assert.equal(content.summaryDate, summaryDate);
+  assert.equal(content.text, deliveries[0]!.message, "the content was persisted before the send");
+  assert.ok(content.monitors.some((monitor) => monitor.monitorId === "loader-discount"));
+
+  assert.deepEqual(await produceDailySummary(input), { status: "sent" });
+  assert.deepEqual(deliveries[1], deliveries[0], "the retry resends the same content with the same client_msg_id");
+  const sent = await readRow(summaryDate);
+  assert.equal(sent?.status, "sent");
+  assert.notEqual(sent?.sentAt, null);
+  assert.equal(sent?.claimToken, null);
+
+  assert.deepEqual(await produceDailySummary(input), { status: "already_sent" });
+  assert.equal(deliveries.length, 2);
+
+  // Never after its date: nothing is created for an earlier date.
+  assert.deepEqual(await produceDailySummary({ ...input, summaryDate: "2026-10-21" }), { status: "expired" });
+  assert.equal(await readRow("2026-10-21"), undefined);
+
+  await assert.rejects(
+    sql`INSERT INTO daily_summaries (summary_date, content, client_message_id) VALUES (${summaryDate}::DATE, '{}'::JSONB, 'x')`,
+    (error: { code?: string }) => error.code === "23505",
+    "at most one row per date",
+  );
+  await assert.rejects(
+    sql`INSERT INTO daily_summaries (summary_date, status, content, client_message_id) VALUES ('2026-10-23'::DATE, 'sent', '{}'::JSONB, 'x')`,
+    (error: { code?: string }) => error.code === "23514",
+    "a sent row has sent_at",
+  );
+  await assert.rejects(
+    sql`INSERT INTO daily_summaries (summary_date, status, content, client_message_id) VALUES ('2026-10-23'::DATE, 'other', '{}'::JSONB, 'x')`,
+    (error: { code?: string }) => error.code === "23514",
+    "status is pending or sent",
   );
 });

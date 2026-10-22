@@ -119,6 +119,28 @@ test("records the import's watched historical-low events with the run", async ()
   assert.equal(values[3], JSON.stringify([{ productId: "5", dropPercent: 12.5 }]));
 });
 
+test("stores the import's daily summary date and monitor definitions warning in import_summary", async () => {
+  let values: unknown[] = [];
+  const sql: EvaluationRunSql = async (strings, ...queryValues) => {
+    values = queryValues;
+    return [runRow];
+  };
+
+  await createEvaluationRun(sql, {
+    importRef: "abc123",
+    candidateProductIds: ["42"],
+    importContext: {
+      productsProcessed: 1, productsInserted: 0, productsUpdated: 1, snapshotsInserted: 1, scanWarnings: [],
+      summaryDate: "2026-10-22", monitorDefinitionsWarning: "unavailable: document returned HTTP 500",
+    },
+  });
+
+  assert.deepEqual(JSON.parse(values[1] as string), {
+    ref: "abc123", productsProcessed: 1, productsInserted: 0, productsUpdated: 1, snapshotsInserted: 1, productsEvaluated: 0,
+    summaryDate: "2026-10-22", monitorDefinitionsWarning: "unavailable: document returned HTTP 500",
+  });
+});
+
 test("creates a run from the INSERT CTEs' own RETURNING output, guarding against a base-table re-read", async () => {
   let query = "";
   const sql: EvaluationRunSql = async (strings, ...values) => {
