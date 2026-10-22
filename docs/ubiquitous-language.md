@@ -245,9 +245,10 @@ same product and observation.
 
 For one product and one `discount_threshold` monitor, the run of consecutive
 priced observations at or above the monitor's current threshold. A priced
-observation with no detected Discount counts as 0% and ends the episode, as
-does any priced observation below the threshold. Observations without a price
-or with an out-of-range Discount are skipped and do not end it.
+observation with no detected Discount, or a Discount of 0, counts as 0% and
+ends the episode, as does any priced observation below the threshold.
+Observations without a price, or with a Discount below 0 or at least 100, are
+skipped and do not end it.
 
 ## Fresh
 

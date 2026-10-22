@@ -59,8 +59,9 @@ function numericOrNull(value: string | null) {
 // How an earlier snapshot counts for transitions (D12, P1 sub-point (i)):
 // - priced (current price ≥ 0 and currency known) with a discount in range:
 //   that discount;
-// - priced with a null discount: 0% (no discount was detected);
-// - no price, or an out-of-range discount: skipped (null).
+// - priced with a null or 0 discount: 0% (no discount was detected; Deals
+//   reports 0 when the card prices are equal);
+// - no price, or a discount below 0 or at least 100: skipped (null).
 function transitionDiscount(observation: WatchedAlertObservation) {
   const price = numericOrNull(observation.currentPrice);
 
@@ -70,7 +71,7 @@ function transitionDiscount(observation: WatchedAlertObservation) {
 
   const discount = numericOrNull(observation.discountPercent);
 
-  return discount !== null && discount > 0 && discount < 100 ? discount : null;
+  return discount !== null && discount >= 0 && discount < 100 ? discount : null;
 }
 
 // D12 condition 5 for one monitor with threshold T. `earlier` holds the
