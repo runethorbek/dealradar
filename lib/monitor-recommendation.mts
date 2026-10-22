@@ -102,8 +102,11 @@ function parsePrice(value: string | null) {
 
 // D8: the producer's discount_percent is used as stored, and only when it is
 // reliable. This holds for every policy, so a discount on a non-Zalando
-// product never qualifies.
-export function isReliableDiscount(candidate: MonitorCandidate) {
+// product never qualifies. Watched alerts (#81) apply it to stored
+// observations as well, so it needs only these fields.
+export function isReliableDiscount(
+  candidate: Pick<MonitorCandidate, "source" | "currentPrice" | "currency" | "discountPercent">,
+) {
   const price = parsePrice(candidate.currentPrice);
   const discount = candidate.discountPercent;
 

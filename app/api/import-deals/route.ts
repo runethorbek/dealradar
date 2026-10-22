@@ -28,6 +28,11 @@ import {
   loadWatchedHistoricalLowCandidates,
   selectWatchedHistoricalLowRecommendation,
 } from "@/lib/watched-historical-low.mts";
+import {
+  deliverPendingWatchedAlerts,
+  recordWatchedAlerts,
+  selectWatchedAlertSnapshotIds,
+} from "@/lib/watched-alerts.mts";
 import { postSlackMessage } from "@/lib/slack";
 import { createEvaluationRun } from "@/lib/evaluation-runs.mts";
 import { getCopenhagenDate } from "@/lib/daily-summary.mts";
@@ -441,6 +446,28 @@ export async function POST(request: Request) {
       );
     } catch {
       console.warn("DealRadar watched historical-low detection failed.");
+    }
+    // Watched alerts (#81, design D12/D13) are detected from the same inserted
+    // snapshots, suppressed where a watched historical-low event exists for
+    // the product (P4(ii)), and delivered right away. A detection or delivery
+    // failure is logged and never fails the import; pending alerts are retried
+    // with the daily notifications and by later imports.
+    let watchedAlertsDetected = 0;
+    try {
+      watchedAlertsDetected = (await recordWatchedAlerts(
+        sql,
+        selectWatchedAlertSnapshotIds(importResults),
+        watchedHistoricalLows,
+      )).length;
+    } catch {
+      console.warn("DealRadar Watched alert detection failed.");
+    }
+    if (watchedAlertsDetected > 0) {
+      try {
+        await deliverPendingWatchedAlerts({ sql, postSlackMessage });
+      } catch {
+        console.warn("DealRadar Watched alert delivery failed.");
+      }
     }
     const evaluationMetrics = {
       candidatesSelected: evaluationCandidates.length,

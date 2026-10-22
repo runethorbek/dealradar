@@ -7,21 +7,33 @@ import {
 import type { DailySummarySql } from "../lib/daily-summary.mts";
 
 // Daily notifications at the end of an import (#80; design D13, "Delivery
-// and retry"): the daily summary, then the Watched alert seam (S6).
+// and retry"): the daily summary, then pending Watched alerts (#81).
 
 const summaryDate = "2026-10-22";
 const now = new Date("2026-10-22T05:00:00.000Z");
 
 // A date with one pending, unclaimed summary whose content is already stored.
 // With `fresh`, the date has no row yet and one active monitor exists.
-function pendingSummarySql(runRow?: Record<string, unknown>, { fresh = false } = {}) {
+// `pendingAlerts` are pending Watched alert rows; an alert is marked sent
+// when its send succeeds.
+function pendingSummarySql(
+  runRow?: Record<string, unknown>,
+  { fresh = false, pendingAlerts = [] as Array<Record<string, unknown>> } = {},
+) {
   const queries: string[] = [];
   const claimValues: unknown[][] = [];
   const insertedContent: unknown[] = [];
   let sent = false;
+  let alertsSent = false;
   const sql: DailySummarySql = async (strings, ...values) => {
     const query = strings.join("$parameter");
     queries.push(query);
+    if (query.includes("FROM watched_alerts alert")) return alertsSent ? [] : pendingAlerts;
+    if (query.includes("UPDATE watched_alerts")) {
+      if (query.includes("SET claimed_at = NOW()")) return [{ alertId: "1", claimToken: "alert-token" }];
+      if (query.includes("SET status = 'sent'")) { alertsSent = true; return [{ id: "1" }]; }
+      return [];
+    }
     if (query.includes("FROM evaluation_runs")) return runRow ? [runRow] : [];
     if (query.includes("SELECT status FROM daily_summaries")) return fresh ? [] : [{ status: sent ? "sent" : "pending" }];
     if (query.includes("FROM monitor_definitions")) return query.includes("LIMIT 1") ? [{ active: 1 }] : [activeMonitorRow];
@@ -85,6 +97,74 @@ test("throws at the end when the summary fails, so a step retry tries again", as
   }
 
   assert.equal(attempts, 1);
+});
+
+const pendingAlert = {
+  alertId: "1", productId: "5", monitorId: "zalando-shoes", snapshotId: "51",
+  discountPercent: "25.00", thresholdPercent: "20.00", reason: "crossing", clientMessageId: "alert-client-1",
+  title: "Watched shoe", externalUrl: "https://www.zalando.dk/shoe", source: "zalando.dk",
+  watched: true, hidden: false, member: true, monitorActive: true,
+  displayName: "Zalando – shoes", currentThresholdPercent: "20.00",
+  productCurrentPrice: "500.00", productCurrency: "DKK", productDiscountPercent: "25.00",
+  observedPrice: "500.00", observedCurrency: "DKK", observedSourcePrice: null, observedSourceCurrency: null,
+  preferenceScore: null, dealScore: null,
+};
+
+test("delivers pending Watched alerts after the daily summary", async () => {
+  const { sql } = pendingSummarySql(undefined, { pendingAlerts: [pendingAlert] });
+  const deliveries: Array<[string, string | undefined]> = [];
+
+  await deliverDailyNotifications({
+    sql,
+    summaryDate,
+    now,
+    postSlackMessage: async (message, clientMessageId) => { deliveries.push([message, clientMessageId]); return { success: true }; },
+    ...noWarnings,
+  });
+
+  assert.deepEqual(deliveries.map(([, clientMessageId]) => clientMessageId), ["client-1", "alert-client-1"]);
+  assert.match(deliveries[1]![0], /^\*DealRadar Watched alert\*\nWatched shoe\n/);
+});
+
+test("a Watched alert failure throws only after the summary was attempted, and the summary failure does not skip alerts", async () => {
+  const warn = console.warn;
+  console.warn = () => {};
+
+  try {
+    const alertFails = pendingSummarySql(undefined, { pendingAlerts: [pendingAlert] });
+    const sent: string[] = [];
+    await assert.rejects(
+      deliverDailyNotifications({
+        sql: alertFails.sql,
+        summaryDate,
+        now,
+        postSlackMessage: async (message) => {
+          if (message.startsWith("*DealRadar Watched alert*")) return { success: false, error: "unavailable" };
+          sent.push(message);
+          return { success: true };
+        },
+        ...noWarnings,
+      }),
+      /Daily notification delivery failed: Watched alerts\./,
+    );
+    assert.deepEqual(sent, ["stored summary"], "the summary was sent first");
+
+    const bothFail = pendingSummarySql(undefined, { pendingAlerts: [pendingAlert] });
+    const attempted: string[] = [];
+    await assert.rejects(
+      deliverDailyNotifications({
+        sql: bothFail.sql,
+        summaryDate,
+        now,
+        postSlackMessage: async (message) => { attempted.push(message); return { success: false, error: "unavailable" }; },
+        ...noWarnings,
+      }),
+      /Daily notification delivery failed: daily summary, Watched alerts\./,
+    );
+    assert.equal(attempted.length, 2, "both parts were attempted");
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test("the Workflow path uses the summary date and warnings stored with the run", async () => {

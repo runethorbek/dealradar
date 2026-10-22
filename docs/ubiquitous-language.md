@@ -23,6 +23,7 @@ Hidden products remain available through the Hidden view. An explicitly
 requested hidden product remains available and is clearly identified as
 Hidden. Hidden products are excluded from product recommendation selection,
 but hiding does not affect operational import summaries or scan warnings.
+Hidden products cause no Watched alerts, including Hidden Watched products.
 
 ## Unhide
 
@@ -56,7 +57,12 @@ transition: the new same-currency observation is strictly lower than the
 previous observation and at or below the lowest earlier same-currency
 observation. Remaining at the same low price is not a new event. Watch gives no
 recommendation priority for Vinted. This does not change dashboard ranking,
-visibility, evaluation input, or the absence of target-price alerts.
+visibility, or evaluation input.
+
+Since #81, a visible Watched product can also receive a **Watched alert** from
+each Active `discount_threshold` monitor it belongs to. Watched state itself
+stays independent of monitor configuration: watching does not add a product to
+a monitor, and there are no per-product target prices.
 
 Since #60, the watched historical-low event is the only recommendation
 priority Watch gives in production: a Watched Zalando price drop that is not a
@@ -216,6 +222,32 @@ monitor's freshness, and the import's monitor definition and Scan warnings. It
 is produced from persisted state after the first import of the day, at most
 once per date, and never after its date. There is no Daily summary without an
 Active monitor. It is separate from the per-import message.
+
+## Watched alert
+
+A Slack notification about a visible Watched product, detected at import time
+from a new observation (an inserted snapshot that is the product's latest),
+for an Active `discount_threshold` monitor the product belongs to. The
+observation has a reliable Discount at or above the monitor's threshold, and
+either the Discount crosses the threshold (the previous priced observation was
+below it) or it is a new best in the Qualifying episode (its whole-percent
+Discount, rounded down, is above the highest in the episode). The baseline
+comes from stored history, so a product that already qualifies when it becomes
+Watched, or when a threshold is lowered, alerts only on its next new best. A
+product's first priced observation never alerts. `best_match` monitors give no Watched alerts. One message is sent per
+product and observation, listing every monitor that triggered, and at most
+once. A pending alert is not sent once the product is no longer Watched,
+visible, and qualifying; it expires. While the watched historical-low event
+remains separate, a Watched alert is not sent when that event occurred for the
+same product and observation.
+
+## Qualifying episode
+
+For one product and one `discount_threshold` monitor, the run of consecutive
+priced observations at or above the monitor's current threshold. A priced
+observation with no detected Discount counts as 0% and ends the episode, as
+does any priced observation below the threshold. Observations without a price
+or with an out-of-range Discount are skipped and do not end it.
 
 ## Fresh
 

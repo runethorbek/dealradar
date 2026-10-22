@@ -236,7 +236,7 @@ export function formatDailySummaryMessage(content: DailySummaryContent) {
   return message + formatScanWarnings(content.scanWarnings);
 }
 
-async function loadPreferenceWeightPercent(sql: DailySummarySql) {
+export async function loadPreferenceWeightPercent(sql: DailySummarySql) {
   const [settings] = await sql`SELECT ranking FROM application_settings WHERE id = 1`;
 
   return (parseRankingSettings(settings?.ranking) ?? defaultRankingSettings).preferenceWeightPercent;
