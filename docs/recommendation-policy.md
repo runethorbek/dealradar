@@ -189,6 +189,63 @@ product, Best match, Discount, Fresh) are defined in
   content. A summary is never sent after its date. Without an Active monitor
   no summary is produced.
 
+## Watched alert
+
+Since #81, DealRadar also sends **Watched alerts** (design D10, D12, D13, P1,
+P4, P5, P6, P10 in `docs/specs/monitor-recommendation-design.md`). They run in
+parallel with the per-import message, which is unchanged. Terms (Watched
+alert, Qualifying episode, Active monitor, Discount) are defined in
+`docs/ubiquitous-language.md`.
+
+- **Candidate.** For product *p*, monitor *M* with threshold *T*, and
+  observation *o*, all of these hold:
+  1. *p* is Watched and visible (not Hidden).
+  2. *M* is an Active `discount_threshold` monitor and is in
+     `p.monitor_ids` after this import. `best_match` monitors never alert.
+  3. *o* is a snapshot inserted by this import and is *p*'s latest
+     observation.
+  4. *o* has a reliable Discount *d* and *d* ≥ *T*, using *T* at detection
+     time.
+  5. **Crossing:** the previous priced observation was below *T*; or **new
+     best:** ⌊*d*⌋ is above the highest ⌊discount⌋ in the current Qualifying
+     episode before *o*.
+- **Earlier observations.** A priced observation (current price and currency
+  known) uses its Discount, or 0% when no discount was detected. Observations
+  without a price or with a Discount outside 0–100 are skipped. A product with
+  no earlier priced observation does not alert, so the baseline comes from
+  stored history: there is no alert at go-live or right after Watch.
+- **Example** (*T* = 20): 15 → 20 → 20 → 25 → 25 → 10 → 20 alerts on the
+  second, fourth, and seventh observation (crossing, new best, crossing).
+- **Several monitors.** Each monitor is detected on its own. One Slack message
+  is sent per product and observation, listing every monitor that triggered
+  and why, with the observation's price and Discount and the stored Overall
+  when an evaluation exists.
+- **Watched historical-low event.** Until the two are merged (P4(c), after
+  this phase is verified), no Watched alert is stored or sent for a product
+  that has a watched historical-low event in the same import; that event is
+  for the same observation and stays in the per-import message.
+- **Detection.** One snapshot-history query per import, next to the watched
+  historical-low detection, over Watched, visible products in Active
+  `discount_threshold` monitors that received a new snapshot with a reliable
+  Discount. Rows go to `watched_alerts` (migration 031), unique per (product,
+  monitor, snapshot) and inserted with `ON CONFLICT DO NOTHING`, so an import
+  retry adds nothing.
+- **Delivery.** `deliverPendingWatchedAlerts` (`lib/watched-alerts.mts`) runs
+  right after detection in the import route and again after the Daily summary
+  (the Workflow step after the evaluation-run finalizer, or the import route's
+  no-candidate path). It claims the pending rows of one product and
+  observation with a lease and token, sends with a client_msg_id derived from
+  the product and snapshot, and marks them sent. A failed send releases the
+  claim, and a later delivery retries it. A pending alert is expired instead
+  of sent once the product is no longer Watched, visible, and qualifying: the
+  monitor is still an Active `discount_threshold` monitor that lists the
+  product, and the product's current reliable Discount is at or above the
+  current threshold.
+- **Failures.** A detection or delivery failure in the import route is logged
+  and never fails the import. In the Workflow step, an alert failure makes
+  the step throw only after the Daily summary was attempted, so the step's
+  retries try again.
+
 ## Removed: Like / Not for me
 
 Like / Not for me feedback was removed in #66, following the #61

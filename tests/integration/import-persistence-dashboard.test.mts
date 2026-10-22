@@ -23,6 +23,7 @@ import {
 import { loadActiveMonitorMembers } from "@/lib/monitor-recommendation-loader.mts";
 import { selectForMonitor } from "@/lib/monitor-recommendation.mts";
 import { produceDailySummary, type DailySummarySql } from "@/lib/daily-summary.mts";
+import { deliverPendingWatchedAlerts, recordWatchedAlerts } from "@/lib/watched-alerts.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
@@ -684,4 +685,126 @@ test("applies migration 030: one daily summary per date, persisted before sendin
     (error: { code?: string }) => error.code === "23514",
     "status is pending or sent",
   );
+});
+
+test("applies migration 031: Watched alerts are detected once per product, monitor, and snapshot and delivered once", async () => {
+  for (const [monitorId, strategy, discount, score] of [
+    ["alerts-20", "discount_threshold", 20, null],
+    ["alerts-25", "discount_threshold", 25, null],
+    ["alerts-best", "best_match", null, 7],
+  ] as const) {
+    await sql`
+      INSERT INTO monitor_definitions (
+        monitor_id, source, display_name, enabled, strategy, minimum_discount_percent, minimum_overall_score,
+        contract_version, definition, definition_ref, last_scan_checked_at
+      ) VALUES (
+        ${monitorId}, 'zalando.dk', ${`Display ${monitorId}`}, TRUE, ${strategy}, ${discount}, ${score},
+        1, '{}'::JSONB, 'ref', NOW()
+      )
+    `;
+  }
+  const externalUrl = "https://www.zalando.dk/alerted-product";
+  const observe = async (discountPercent: number | null, observedAt: string) => {
+    const [result] = await persistImportedProducts(importSql, [
+      product({
+        externalUrl,
+        title: "Alerted product",
+        discountPercent,
+        observedAt,
+        rawData: { monitor_ids: ["alerts-20", "alerts-25", "alerts-best"] },
+      }),
+    ]);
+    return result!;
+  };
+  const detect = (snapshotId: string | null) => recordWatchedAlerts(sql as never, snapshotId ? [snapshotId] : []);
+  const alertRows = async () => sql`
+    SELECT monitor_id AS "monitorId", snapshot_id::TEXT AS "snapshotId", discount_percent::TEXT AS "discountPercent",
+      threshold_percent::TEXT AS "thresholdPercent", reason, status, client_message_id AS "clientMessageId",
+      claim_token AS "claimToken", sent_at AS "sentAt"
+    FROM watched_alerts
+    ORDER BY snapshot_id, monitor_id
+  `;
+  const deliveries: Array<{ message: string; clientMessageId: string | undefined }> = [];
+  let slackFails = false;
+  const deliver = () => deliverPendingWatchedAlerts({
+    sql: sql as never,
+    postSlackMessage: async (message, clientMessageId) => {
+      deliveries.push({ message, clientMessageId });
+      return slackFails ? { success: false, error: "unavailable" } : { success: true };
+    },
+  });
+
+  const first = await observe(15, "2026-10-20T03:00:00.000Z");
+  await sql`UPDATE products SET watched = TRUE WHERE id = ${first.productId}`;
+  assert.deepEqual(await detect(first.snapshotId), [], "first observation");
+
+  const crossing = await observe(25, "2026-10-21T03:00:00.000Z");
+  assert.deepEqual(
+    (await detect(crossing.snapshotId)).map((candidate) => [candidate.monitorId, candidate.reason]),
+    [["alerts-20", "crossing"], ["alerts-25", "crossing"]],
+    "best_match monitors never alert",
+  );
+  assert.equal((await detect(crossing.snapshotId)).length, 2, "a retried detection finds the same candidates");
+  const stored = await alertRows();
+  const hash = createHash("md5").update(`dealradar:watched-alert:${first.productId}:${crossing.snapshotId}`).digest("hex");
+  assert.deepEqual(stored.map((row) => ({ ...row })), ["alerts-20", "alerts-25"].map((monitorId) => ({
+    monitorId,
+    snapshotId: crossing.snapshotId,
+    discountPercent: "25.00",
+    thresholdPercent: monitorId === "alerts-20" ? "20.00" : "25.00",
+    reason: "crossing",
+    status: "pending",
+    clientMessageId: `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`,
+    claimToken: null,
+    sentAt: null,
+  })), "one row per monitor, idempotent across retries");
+
+  const retry = await observe(25, "2026-10-21T03:00:00.000Z");
+  assert.equal(retry.snapshotId, null, "an import retry inserts no snapshot, so nothing is detected");
+
+  await assert.rejects(
+    sql`
+      INSERT INTO watched_alerts (product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, reason, client_message_id)
+      VALUES (${first.productId}, 'alerts-20', ${crossing.snapshotId}, 25, 20, 'crossing', 'x')
+    `,
+    (error: { code?: string }) => error.code === "23505",
+    "unique per (product, monitor, snapshot)",
+  );
+
+  slackFails = true;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(deliver(), /can be retried/);
+  } finally {
+    console.warn = warn;
+  }
+  assert.deepEqual((await alertRows()).map((row) => [row.status, row.claimToken]), [["pending", null], ["pending", null]]);
+
+  slackFails = false;
+  assert.deepEqual(await deliver(), { sent: 1, expired: 0 });
+  assert.equal(deliveries.length, 2);
+  assert.deepEqual(deliveries[1], deliveries[0], "the retry sends the same message with the same client_msg_id");
+  assert.equal(deliveries[1]!.clientMessageId, stored[0]!.clientMessageId);
+  assert.match(deliveries[1]!.message, /^\*DealRadar Watched alert\*\nAlerted product\n100\.00 DKK · 25% discount · /);
+  assert.match(deliveries[1]!.message, /\n• Display alerts-20: crossed the 20% threshold\n• Display alerts-25: crossed the 25% threshold$/);
+  assert.deepEqual((await alertRows()).map((row) => row.status), ["sent", "sent"]);
+  assert.deepEqual(await deliver(), { sent: 0, expired: 0 }, "sent at most once");
+
+  assert.deepEqual(await detect((await observe(25, "2026-10-22T03:00:00.000Z")).snapshotId), [], "unchanged discount");
+  const improved = await observe(30, "2026-10-22T09:00:00.000Z");
+  assert.deepEqual(
+    (await detect(improved.snapshotId)).map((candidate) => [candidate.monitorId, candidate.reason]),
+    [["alerts-20", "new_best"], ["alerts-25", "new_best"]],
+  );
+
+  // P5(b): unwatched before delivery, so the pending alerts expire.
+  await sql`UPDATE products SET watched = FALSE WHERE id = ${first.productId}`;
+  assert.deepEqual(await deliver(), { sent: 0, expired: 2 });
+  assert.equal(deliveries.length, 2);
+  assert.deepEqual((await alertRows()).slice(2).map((row) => row.status), ["expired", "expired"]);
+
+  // 40% would be a new best, but Hidden products are excluded.
+  await sql`UPDATE products SET watched = TRUE, hidden = TRUE WHERE id = ${first.productId}`;
+  assert.deepEqual(await detect((await observe(40, "2026-10-24T03:00:00.000Z")).snapshotId), [], "Hidden products are excluded");
 });

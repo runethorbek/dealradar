@@ -7,6 +7,7 @@ import {
   type PostSlackMessage,
 } from "./daily-summary.mts";
 import type { PartialScanWarning } from "./import-notification.mts";
+import { deliverPendingWatchedAlerts } from "./watched-alerts.mts";
 
 // Daily notifications delivered at the end of an import (#80; design D13,
 // "Delivery and retry"). Both triggers call deliverDailyNotifications: the
@@ -20,11 +21,8 @@ type DailyNotificationsDependencies = DailySummaryWarnings & {
   now?: Date;
 };
 
-// Seam for pending Watched alerts (S6). Until then there is nothing to
-// deliver.
-async function deliverPendingWatchedAlerts() {}
-
-// Order (D13, QB): the daily summary, then pending Watched alerts. Both are
+// Order (D13, QB): the daily summary, then pending Watched alerts (#81),
+// which catches alerts left pending by an earlier failed send. Both are
 // always attempted; a failure in one does not skip the other. It throws at
 // the end if either failed, so a step retry tries again. Retries are
 // idempotent through each part's claim and sent state.
@@ -54,7 +52,7 @@ export async function deliverDailyNotifications({
   }
 
   try {
-    await deliverPendingWatchedAlerts();
+    await deliverPendingWatchedAlerts({ sql, postSlackMessage });
   } catch {
     failures.push("Watched alerts");
     console.warn("DealRadar Watched alert delivery failed.");
