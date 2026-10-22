@@ -680,12 +680,20 @@ type MonitorSelection = {
   best: MonitorCandidate | null;
 };
 
+// One active monitor as returned by the loader.
+type MonitorMembers = {
+  policy: MonitorPolicy;
+  lastScanCheckedAt: string | null;     // monitor_definitions.last_scan_checked_at
+  candidates: MonitorCandidate[];       // fresh, visible members
+};
+
 function qualifies(policy: MonitorPolicy, c: MonitorCandidate, w: number): boolean;
 function compareQualified(policy: MonitorPolicy, a: MonitorCandidate, b: MonitorCandidate, w: number): number;
-function selectForMonitor(policy: MonitorPolicy, freshCandidates: MonitorCandidate[], w: number): MonitorSelection;
+function selectForMonitor(monitor: MonitorMembers, w: number, now: Date): MonitorSelection;
 ```
 
-`w` is `preferenceWeightPercent`. The loader returns, for each active
+`w` is `preferenceWeightPercent`. `selectForMonitor` takes the monitor's
+`lastScanCheckedAt` and `now` because monitor freshness (D7) needs both. The loader returns, for each active
 monitor, its fresh, visible members (D7) with stored evaluations, in one
 query. Ranking reuses `getOverallScore` and `compareProductIds`
 (`lib/ranking-settings.mts:28-35`; `lib/import-notification.mts:233-239`).

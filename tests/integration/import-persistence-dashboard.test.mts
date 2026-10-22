@@ -19,6 +19,8 @@ import {
   type MonitorDefinitionsDocument,
   type MonitorScanEvidence,
 } from "@/lib/monitor-definitions.mts";
+import { loadActiveMonitorMembers } from "@/lib/monitor-recommendation-loader.mts";
+import { selectForMonitor } from "@/lib/monitor-recommendation.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
@@ -483,4 +485,132 @@ test("every product upsert overwrites products.monitor_ids from the feed", async
     "a monitor no longer listed by the feed is removed",
   );
   assert.deepEqual(await membership({}, "2026-02-03T00:00:00.000Z"), []);
+});
+
+test("loads active monitors with their fresh, visible members and stored evaluations in one query", async () => {
+  const scanAt = "2026-10-22T03:40:00.123456Z"; // microseconds, as stored
+  const insertMonitor = (
+    monitorId: string,
+    source: string,
+    strategy: string | null,
+    discount: number | null,
+    score: number | null,
+    lastScanCheckedAt: string | null,
+    { enabled = true, removed = false } = {},
+  ) => sql`
+    INSERT INTO monitor_definitions (
+      monitor_id, source, display_name, enabled, strategy, minimum_discount_percent, minimum_overall_score,
+      contract_version, definition, definition_ref, removed_at, last_scan_checked_at
+    ) VALUES (
+      ${monitorId}, ${source}, ${`Display ${monitorId}`}, ${enabled}, ${strategy}, ${discount}, ${score},
+      1, '{}'::JSONB, 'ref', ${removed ? new Date() : null}, ${lastScanCheckedAt}::TEXT::TIMESTAMPTZ
+    )
+  `;
+
+  await insertMonitor("loader-discount", "zalando.dk", "discount_threshold", 20, null, scanAt);
+  await insertMonitor("loader-best", "zalando.dk", "best_match", null, 7, scanAt);
+  await insertMonitor("loader-never", "zalando.dk", "best_match", null, 7, null);
+  await insertMonitor("loader-disabled", "zalando.dk", "best_match", null, 7, scanAt, { enabled: false });
+  await insertMonitor("loader-removed", "zalando.dk", "best_match", null, 7, scanAt, { removed: true });
+  await insertMonitor("loader-unconfigured", "zalando.dk", null, null, null, scanAt);
+
+  const allMonitors = [
+    "loader-discount", "loader-best", "loader-never", "loader-disabled", "loader-removed", "loader-unconfigured",
+  ];
+  const results = await persistImportedProducts(importSql, [
+    product({
+      externalUrl: "https://www.zalando.dk/loader-a",
+      title: "Loader A",
+      discountPercent: 30,
+      observedAt: scanAt,
+      rawData: { monitor_ids: ["loader-discount", "loader-best"] },
+    }),
+    product({
+      externalUrl: "https://www.zalando.dk/loader-missed",
+      title: "Loader missed",
+      observedAt: "2026-10-22T03:40:00.123455Z", // 1 microsecond before the scan
+      rawData: { monitor_ids: allMonitors },
+    }),
+    product({
+      externalUrl: "https://www.zalando.dk/loader-hidden",
+      title: "Loader hidden",
+      observedAt: scanAt,
+      rawData: { monitor_ids: allMonitors },
+    }),
+    product({
+      externalUrl: "https://www.zalando.dk/loader-d",
+      title: "Loader D",
+      discountPercent: 50,
+      observedAt: "2026-10-22T04:00:00.000Z",
+      rawData: { monitor_ids: allMonitors },
+    }),
+    product({
+      externalUrl: "https://www.zalando.dk/loader-none",
+      title: "Loader none",
+      observedAt: scanAt,
+      rawData: {},
+    }),
+  ]);
+  const [a, missed, hidden, d] = results.map((result) => String(result.productId));
+  // postgres.js serializes an inferred timestamp parameter through Date
+  // (milliseconds), so microsecond times are written as text casts.
+  for (const [id, lastSeenAt] of [[a!, scanAt], [missed!, "2026-10-22T03:40:00.123455Z"]]) {
+    await sql`UPDATE products SET last_seen_at = ${lastSeenAt!}::TEXT::TIMESTAMPTZ WHERE id = ${id!}`;
+  }
+  await sql`UPDATE products SET hidden = TRUE WHERE id = ${hidden!}`;
+  await sql`
+    INSERT INTO product_evaluations (product_id, preference_score, deal_score, reason, evaluated_at)
+    VALUES (${a!}, 8, 7, 'stored', '2025-01-01T00:00:00Z'), (${hidden!}, 10, 10, 'stored', NOW())
+  `;
+
+  const loaded = (await loadActiveMonitorMembers(sql as never))
+    .filter((monitor) => monitor.policy.monitorId.startsWith("loader-"));
+
+  assert.deepEqual(loaded.map((monitor) => monitor.policy), [
+    { monitorId: "loader-best", source: "zalando.dk", displayName: "Display loader-best", strategy: "best_match", minimumOverallScore: 7 },
+    { monitorId: "loader-discount", source: "zalando.dk", displayName: "Display loader-discount", strategy: "discount_threshold", minimumDiscountPercent: 20 },
+    { monitorId: "loader-never", source: "zalando.dk", displayName: "Display loader-never", strategy: "best_match", minimumOverallScore: 7 },
+  ], "disabled, removed, and unconfigured monitors are not active");
+  assert.deepEqual(
+    loaded.map((monitor) => [monitor.policy.monitorId, monitor.candidates.map((candidate) => candidate.productId)]),
+    [
+      ["loader-best", [a, d]],
+      ["loader-discount", [a, d]],
+      ["loader-never", []],
+    ],
+    "membership, tolerance 0, and visibility",
+  );
+  assert.match(loaded[0]!.lastScanCheckedAt!, /03:40:00[.]123456/);
+  assert.equal(Date.parse(loaded[0]!.lastScanCheckedAt!), Date.parse(scanAt));
+  assert.equal(loaded[2]!.lastScanCheckedAt, null);
+
+  const [candidateA, candidateD] = loaded[1]!.candidates;
+  assert.equal(candidateA!.title, "Loader A");
+  assert.equal(candidateA!.externalUrl, "https://www.zalando.dk/loader-a");
+  assert.equal(candidateA!.source, "zalando.dk");
+  assert.equal(candidateA!.currentPrice, "100.00");
+  assert.equal(candidateA!.currency, "DKK");
+  assert.equal(candidateA!.discountPercent, 30);
+  assert.equal(candidateA!.preferenceScore, 8, "a stored evaluation is used whatever its age");
+  assert.equal(candidateA!.dealScore, 7);
+  assert.equal(candidateA!.hidden, false);
+  assert.equal(Date.parse(candidateA!.lastSeenAt), Date.parse(scanAt));
+  assert.equal(candidateD!.preferenceScore, null);
+  assert.equal(candidateD!.dealScore, null);
+
+  const selections = loaded.map((monitor) => selectForMonitor(monitor, 60, new Date("2026-10-22T12:00:00.000Z")));
+  assert.deepEqual(
+    selections.map((selection) => [
+      selection.monitorId,
+      selection.freshness,
+      selection.qualifyingCount,
+      selection.unevaluatedQualifyingCount,
+      selection.best?.productId ?? null,
+    ]),
+    [
+      ["loader-best", "current", 1, 0, a],
+      ["loader-discount", "current", 2, 1, a],
+      ["loader-never", "never_scanned", 0, 0, null],
+    ],
+  );
 });
