@@ -231,10 +231,10 @@ for an Active `discount_threshold` monitor the product belongs to. The
 observation has a reliable Discount at or above the monitor's threshold, and
 either the Discount crosses the threshold (the previous priced observation was
 below it) or it is a new best in the Qualifying episode (its whole-percent
-Discount, rounded down, is above the highest in the episode). A product's first
-priced observation never alerts, so a product that already qualifies when it
-becomes Watched, or when a threshold is lowered, alerts only on its next new
-best. `best_match` monitors give no Watched alerts. One message is sent per
+Discount, rounded down, is above the highest in the episode). The baseline
+comes from stored history, so a product that already qualifies when it becomes
+Watched, or when a threshold is lowered, alerts only on its next new best. A
+product's first priced observation never alerts. `best_match` monitors give no Watched alerts. One message is sent per
 product and observation, listing every monitor that triggered, and at most
 once. A pending alert is not sent once the product is no longer Watched,
 visible, and qualifying; it expires. While the watched historical-low event

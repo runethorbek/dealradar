@@ -211,7 +211,8 @@ alert, Qualifying episode, Active monitor, Discount) are defined in
      episode before *o*.
 - **Earlier observations.** A priced observation (current price and currency
   known) uses its Discount, or 0% when no discount was detected. Observations
-  without a price or with a Discount outside 0–100 are skipped. A product with
+  without a price or with a Discount that is not between 0 and 100
+  (exclusive) are skipped. A product with
   no earlier priced observation does not alert, so the baseline comes from
   stored history: there is no alert at go-live or right after Watch.
 - **Example** (*T* = 20): 15 → 20 → 20 → 25 → 25 → 10 → 20 alerts on the

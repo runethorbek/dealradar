@@ -107,8 +107,10 @@ test("D12 lifecycle table", async (t) => {
     assert.deepEqual(reasons([15, 25, 25, 26]), ["new_best"], "the next new best alerts");
   });
 
-  await t.test("Hidden, then Unhide: observations while Hidden still form the history", () => {
-    assert.deepEqual(reasons([15, 25, 25]), [], "unhide does not alert by itself");
+  // Hidden exclusion itself is a detection-query filter: it is covered by the
+  // SQL filter assertion below and by the integration test.
+  await t.test("Unhide does not alert by itself: the history-based baseline gives no alert for an unchanged discount", () => {
+    assert.deepEqual(reasons([15, 25, 25]), []);
   });
 
   await t.test("unavailable, then reappearing: compared with the previous priced observation", () => {
