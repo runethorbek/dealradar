@@ -52,6 +52,9 @@ export type DailySummaryMonitor = {
   lastScanCheckedAt: string | null;
   qualifyingCount: number;
   notYetEvaluatedCount: number;
+  // The policy's count of qualifying products without an evaluation; it
+  // decides why a monitor with qualifying products has no best match.
+  unevaluatedQualifyingCount: number;
   bestMatch: DailySummaryBestMatch | null;
 };
 
@@ -138,6 +141,7 @@ export function buildDailySummaryMonitor(
     lastScanCheckedAt,
     qualifyingCount: selection.qualifyingCount,
     notYetEvaluatedCount,
+    unevaluatedQualifyingCount: selection.unevaluatedQualifyingCount,
     bestMatch: best
       ? {
           productId: best.productId,
@@ -168,7 +172,7 @@ function formatScanTime(value: string | null) {
 function formatStrategy(monitor: DailySummaryMonitor) {
   return monitor.strategy === "discount_threshold"
     ? `Strategy: discount threshold · at least ${formatNumber(monitor.threshold)}% discount`
-    : `Strategy: best match · Overall at least ${monitor.threshold.toFixed(1)}`;
+    : `Strategy: best match · Overall at least ${formatNumber(monitor.threshold)}`;
 }
 
 function formatBestMatch(bestMatch: DailySummaryBestMatch) {
@@ -207,7 +211,7 @@ function formatMonitor(monitor: DailySummaryMonitor) {
     lines.push(formatBestMatch(monitor.bestMatch));
   } else if (monitor.qualifyingCount === 0) {
     lines.push("No products qualify.");
-  } else if (monitor.notYetEvaluatedCount >= monitor.qualifyingCount) {
+  } else if (monitor.unevaluatedQualifyingCount >= monitor.qualifyingCount) {
     lines.push("No best match: no qualifying product is evaluated yet.");
   } else {
     lines.push("No best match: no qualifying product has a displayable price.");

@@ -49,6 +49,7 @@ function monitor(overrides: Partial<DailySummaryMonitor> = {}): DailySummaryMoni
     lastScanCheckedAt: scanAt,
     qualifyingCount: 3,
     notYetEvaluatedCount: 1,
+    unevaluatedQualifyingCount: 1,
     bestMatch: {
       productId: "1",
       title: "Test shoe",
@@ -100,6 +101,7 @@ test("uses the monitor ID when there is no display name, and shows a best_match 
     threshold: 7,
     qualifyingCount: 2,
     notYetEvaluatedCount: 4,
+    unevaluatedQualifyingCount: 0,
     bestMatch: {
       productId: "9",
       title: "Blazer <wool> & silk",
@@ -112,7 +114,7 @@ test("uses the monitor ID when there is no display name, and shows a best_match 
   })]));
 
   assert.match(message, /\n\n\*vinted-mens-blazers-size-s\*\n/);
-  assert.match(message, /Strategy: best match · Overall at least 7\.0\n/);
+  assert.match(message, /Strategy: best match · Overall at least 7\n/);
   assert.match(message, /Qualifying: 2 · Not yet evaluated: 4\n/);
   assert.match(message, /Best match: Blazer &lt;wool&gt; &amp; silk\n150\.00 DKK · Overall 8\.3 · <https:\/\/www\.vinted\.dk\/items\/9-blazer\|View product>$/);
   assert.doesNotMatch(message, /discount/, "no discount is shown where none applies");
@@ -128,6 +130,7 @@ test("states the freshness of stale and never-scanned monitors and shows no best
       lastScanCheckedAt: null,
       qualifyingCount: 0,
       notYetEvaluatedCount: 0,
+      unevaluatedQualifyingCount: 0,
       bestMatch: null,
     }),
   ]));
@@ -144,14 +147,22 @@ test("states the freshness of stale and never-scanned monitors and shows no best
 });
 
 test("states clearly when nothing qualifies or no qualifying product can be shown", () => {
-  const nothing = formatDailySummaryMessage(content([monitor({ qualifyingCount: 0, notYetEvaluatedCount: 0, bestMatch: null })]));
+  const nothing = formatDailySummaryMessage(content([monitor({ qualifyingCount: 0, notYetEvaluatedCount: 0, unevaluatedQualifyingCount: 0, bestMatch: null })]));
   assert.match(nothing, /Qualifying: 0 · Not yet evaluated: 0\nNo products qualify\.$/);
 
-  const noneEvaluated = formatDailySummaryMessage(content([monitor({ qualifyingCount: 2, notYetEvaluatedCount: 2, bestMatch: null })]));
+  const noneEvaluated = formatDailySummaryMessage(content([monitor({ qualifyingCount: 2, notYetEvaluatedCount: 2, unevaluatedQualifyingCount: 2, bestMatch: null })]));
   assert.match(noneEvaluated, /Qualifying: 2 · Not yet evaluated: 2\nNo best match: no qualifying product is evaluated yet\.$/);
 
-  const noPrice = formatDailySummaryMessage(content([monitor({ qualifyingCount: 2, notYetEvaluatedCount: 0, bestMatch: null })]));
+  const noPrice = formatDailySummaryMessage(content([monitor({ qualifyingCount: 2, notYetEvaluatedCount: 0, unevaluatedQualifyingCount: 0, bestMatch: null })]));
   assert.match(noPrice, /No best match: no qualifying product has a displayable price\.$/);
+
+  // best_match: the not-yet-evaluated count covers non-qualifying members, so
+  // it does not decide the reason; qualifying products are all evaluated.
+  const bestMatchNoPrice = formatDailySummaryMessage(content([monitor({
+    strategy: "best_match", threshold: 7.25, qualifyingCount: 2, notYetEvaluatedCount: 5, unevaluatedQualifyingCount: 0, bestMatch: null,
+  })]));
+  assert.match(bestMatchNoPrice, /Strategy: best match · Overall at least 7\.25\n/);
+  assert.match(bestMatchNoPrice, /Qualifying: 2 · Not yet evaluated: 5\nNo best match: no qualifying product has a displayable price\.$/);
 });
 
 test("repeats the monitor definitions warning and scan warnings", () => {
@@ -204,6 +215,7 @@ test("builds monitor entries from the S4 policy, including the not-yet-evaluated
     lastScanCheckedAt: scanAt,
     qualifyingCount: 2,
     notYetEvaluatedCount: 1,
+    unevaluatedQualifyingCount: 1,
     bestMatch: {
       productId: "1",
       title: "Test shoe",
@@ -218,6 +230,24 @@ test("builds monitor entries from the S4 policy, including the not-yet-evaluated
   const bestMatch = buildDailySummaryMonitor(bestMatchMonitor, 60, now);
   assert.equal(bestMatch.qualifyingCount, 1);
   assert.equal(bestMatch.notYetEvaluatedCount, 2, "fresh unevaluated members of a best_match monitor");
+  assert.equal(bestMatch.unevaluatedQualifyingCount, 0);
+
+  // Qualifying best_match products without a displayable price, next to more
+  // unevaluated members: the reason is the missing price.
+  const noPrice = { currentPrice: null, currency: null };
+  const unpriced = buildDailySummaryMonitor({
+    ...bestMatchMonitor,
+    candidates: [
+      candidate({ productId: "1", ...noPrice }),
+      candidate({ productId: "2", ...unevaluated }),
+      candidate({ productId: "3", ...unevaluated }),
+    ],
+  }, 60, now);
+  assert.deepEqual(
+    [unpriced.qualifyingCount, unpriced.notYetEvaluatedCount, unpriced.unevaluatedQualifyingCount, unpriced.bestMatch],
+    [1, 2, 0, null],
+  );
+  assert.match(formatDailySummaryMessage(content([unpriced])), /No best match: no qualifying product has a displayable price\.$/);
   assert.equal(bestMatch.threshold, 7);
   assert.equal(bestMatch.bestMatch?.productId, "1");
 
