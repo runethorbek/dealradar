@@ -488,7 +488,7 @@ test("every product upsert overwrites products.monitor_ids from the feed", async
 });
 
 test("loads active monitors with their fresh, visible members and stored evaluations in one query", async () => {
-  const scanAt = "2026-10-22T03:40:00.000Z";
+  const scanAt = "2026-10-22T03:40:00.123456Z"; // microseconds, as stored
   const insertMonitor = (
     monitorId: string,
     source: string,
@@ -503,7 +503,7 @@ test("loads active monitors with their fresh, visible members and stored evaluat
       contract_version, definition, definition_ref, removed_at, last_scan_checked_at
     ) VALUES (
       ${monitorId}, ${source}, ${`Display ${monitorId}`}, ${enabled}, ${strategy}, ${discount}, ${score},
-      1, '{}'::JSONB, 'ref', ${removed ? new Date() : null}, ${lastScanCheckedAt}
+      1, '{}'::JSONB, 'ref', ${removed ? new Date() : null}, ${lastScanCheckedAt}::TEXT::TIMESTAMPTZ
     )
   `;
 
@@ -528,7 +528,7 @@ test("loads active monitors with their fresh, visible members and stored evaluat
     product({
       externalUrl: "https://www.zalando.dk/loader-missed",
       title: "Loader missed",
-      observedAt: "2026-10-22T03:39:59.999Z",
+      observedAt: "2026-10-22T03:40:00.123455Z", // 1 microsecond before the scan
       rawData: { monitor_ids: allMonitors },
     }),
     product({
@@ -551,7 +551,12 @@ test("loads active monitors with their fresh, visible members and stored evaluat
       rawData: {},
     }),
   ]);
-  const [a, , hidden, d] = results.map((result) => String(result.productId));
+  const [a, missed, hidden, d] = results.map((result) => String(result.productId));
+  // postgres.js serializes an inferred timestamp parameter through Date
+  // (milliseconds), so microsecond times are written as text casts.
+  for (const [id, lastSeenAt] of [[a!, scanAt], [missed!, "2026-10-22T03:40:00.123455Z"]]) {
+    await sql`UPDATE products SET last_seen_at = ${lastSeenAt!}::TEXT::TIMESTAMPTZ WHERE id = ${id!}`;
+  }
   await sql`UPDATE products SET hidden = TRUE WHERE id = ${hidden!}`;
   await sql`
     INSERT INTO product_evaluations (product_id, preference_score, deal_score, reason, evaluated_at)
@@ -575,6 +580,7 @@ test("loads active monitors with their fresh, visible members and stored evaluat
     ],
     "membership, tolerance 0, and visibility",
   );
+  assert.match(loaded[0]!.lastScanCheckedAt!, /03:40:00[.]123456/);
   assert.equal(Date.parse(loaded[0]!.lastScanCheckedAt!), Date.parse(scanAt));
   assert.equal(loaded[2]!.lastScanCheckedAt, null);
 

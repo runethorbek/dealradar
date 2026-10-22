@@ -218,6 +218,9 @@ test("monitor freshness: current within 36 hours, stale when older, never_scanne
   assert.equal(getMonitorFreshness("2026-10-21T00:00:00.000Z", now), "current", "exactly 36 hours");
   assert.equal(getMonitorFreshness("2026-10-20T23:59:59.999Z", now), "stale");
   assert.equal(getMonitorFreshness("2026-10-22 03:40:00+00", now), "current", "Postgres timestamp text");
+  assert.equal(getMonitorFreshness("2026-10-21 00:00:00.000999+00", now), "current", "36 hours, microsecond text");
+  assert.equal(getMonitorFreshness("2026-10-20 23:59:59.999999+00", now), "stale", "microsecond text");
+  assert.equal(getMonitorFreshness("2026-10-22 03:40:12.345678+00", now), "current");
   assert.equal(getMonitorFreshness(null, now), "never_scanned");
   assert.equal(getMonitorFreshness("not a time", now), "stale");
 
@@ -246,6 +249,30 @@ test("only visible products seen in the latest scan are members (tolerance 0)", 
   assert.equal(isFreshVisibleCandidate(scannedAt, candidate({ lastSeenAt: "2026-10-22T03:39:59.999Z" })), false);
   assert.equal(isFreshVisibleCandidate(scannedAt, candidate({ hidden: true })), false);
   assert.equal(isFreshVisibleCandidate(null, candidate({})), false);
+
+  // Postgres ::TEXT timestamps carry microseconds; Date.parse keeps
+  // milliseconds, which preserves the >= order.
+  const scanText = "2026-10-22 03:40:12.345678+00";
+  assert.equal(isFreshVisibleCandidate(scanText, candidate({ lastSeenAt: scanText })), true, "equal");
+  assert.equal(
+    isFreshVisibleCandidate(scanText, candidate({ lastSeenAt: "2026-10-22 03:40:12.345999+00" })),
+    true,
+    "later within the same millisecond",
+  );
+  assert.equal(
+    isFreshVisibleCandidate(scanText, candidate({ lastSeenAt: "2026-10-22 03:40:12.346001+00" })),
+    true,
+  );
+  assert.equal(
+    isFreshVisibleCandidate(scanText, candidate({ lastSeenAt: "2026-10-22 03:40:12.344999+00" })),
+    false,
+    "an earlier millisecond",
+  );
+  assert.equal(
+    isFreshVisibleCandidate(scanText, candidate({ lastSeenAt: "2026-10-22 05:40:12.345678+02" })),
+    true,
+    "offset text for the same instant",
+  );
 
   const selection = select(bestMatch, [
     candidate({ productId: "1", hidden: true, preferenceScore: 10, dealScore: 10 }),
