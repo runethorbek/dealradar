@@ -502,18 +502,17 @@ export async function POST(request: Request) {
     console.info("DealRadar durable evaluation initiated.", { ...preselection.metrics, evaluationRunId });
     // There is no durable work to finalize when nothing was selected, so retain
     // one useful import notification without creating a stranded empty run.
-    // It has no recommendation: the Zalando fallback (#60) and the Vinted
-    // recommendation use products evaluated in this import, and a watched
-    // historical-low event is a Watched alert since #89.
+    // Like the finalizer's, it is operational only: counts and scan warnings
+    // (#90, design P7(b)).
     if (evaluationCandidates.length === 0) {
-      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, { zalando: null, vinted: null }, partialScanWarnings);
+      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, partialScanWarnings);
       try {
         const slackResult = await postSlackMessage(slackMessage);
         if (!slackResult.success) console.warn(`DealRadar Slack notification failed: ${slackResult.error}.`);
       } catch {
         console.warn("DealRadar Slack notification failed: unexpected_error.");
       }
-      // The daily summary follows the legacy message (#80, design D13). A
+      // The daily summary follows the per-import message (#80, design D13). A
       // failure is logged and never fails the import; a later import on the
       // same date retries it.
       try {

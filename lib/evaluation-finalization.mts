@@ -8,13 +8,9 @@ import {
 } from "./evaluation-runs.mts";
 import {
   formatImportSlackMessage,
-  selectVintedRecommendation,
-  selectZalandoFallbackRecommendation,
-  type ImportRecommendation,
   type ImportSummary,
   type PartialScanWarning,
 } from "./import-notification.mts";
-import { defaultRankingSettings, parseRankingSettings } from "./ranking-settings.mts";
 
 type FinalizationDependencies = {
   sql: EvaluationRunSql;
@@ -42,35 +38,13 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
     SELECT import_summary AS "importSummary", scan_warnings AS "scanWarnings"
     FROM evaluation_runs WHERE id = ${persistedRun.id}
   `;
-  const recommendations = await sql`
-    SELECT p.id::TEXT AS "productId", p.external_url AS "externalUrl", p.title,
-      p.source, p.brand,
-      p.raw_data ->> 'listing_text' AS "listingText",
-      p.raw_data ->> 'article_condition' AS "articleCondition",
-      p.raw_data ->> 'size_guess' AS "sizeGuess",
-      pe.translated_listing_text_da AS "translatedListingTextDa",
-      p.current_price::TEXT AS "currentPrice", p.currency,
-      p.source_current_price::TEXT AS "sourceCurrentPrice", p.source_currency AS "sourceCurrency",
-      p.hidden, pe.preference_score AS "preferenceScore", pe.deal_score AS "dealScore"
-    FROM evaluation_run_candidates erc
-    JOIN products p ON p.id = erc.product_id
-    JOIN product_evaluations pe ON pe.product_id = p.id
-    WHERE erc.run_id = ${persistedRun.id} AND erc.status = 'completed'
-  ` as ImportRecommendation[];
   const importSummary = summary(metadata?.importSummary, persistedRun.importRef);
   importSummary.productsEvaluated = persistedRun.evaluationsCompleted;
   const warnings = Array.isArray(metadata?.scanWarnings) ? metadata.scanWarnings as PartialScanWarning[] : [];
   try {
-    const [rankingSettings] = await sql`SELECT ranking FROM application_settings WHERE id = 1`;
-    const preferenceWeightPercent = parseRankingSettings(rankingSettings?.ranking)?.preferenceWeightPercent ?? defaultRankingSettings.preferenceWeightPercent;
-    // The Zalando recommendation is the fallback (#60) only: a watched
-    // historical-low event is a Watched alert since #89, and the run's
-    // watched_historical_lows is a diagnostic record that is not read here.
-    const sourceRecommendations = {
-      zalando: selectZalandoFallbackRecommendation(recommendations, preferenceWeightPercent),
-      vinted: selectVintedRecommendation(recommendations, preferenceWeightPercent),
-    };
-    const result = await postSlackMessage(formatImportSlackMessage(importSummary, sourceRecommendations, warnings), claim.clientMessageId);
+    // The per-import message is operational only (#90, design P7(b)): the
+    // run's completed evaluations and watched_historical_lows are not read.
+    const result = await postSlackMessage(formatImportSlackMessage(importSummary, warnings), claim.clientMessageId);
     if (!result.success) throw new Error(`Slack delivery failed: ${result.error ?? "unknown_error"}.`);
     if (!await markEvaluationRunNotificationSent(sql, persistedRun.id, claim.claimToken)) throw new Error("Evaluation run notification could not be recorded.");
   } catch {

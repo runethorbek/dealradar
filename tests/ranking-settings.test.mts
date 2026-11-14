@@ -6,7 +6,6 @@ import {
   getOverallScore,
   parseRankingSettings,
 } from "../lib/ranking-settings.mts";
-import { getOverallEvaluationScore } from "../lib/import-notification.mts";
 
 test("the default preference weight remains 60, deriving a 40 deal weight", () => {
   assert.equal(defaultRankingSettings.preferenceWeightPercent, 60);
@@ -53,21 +52,6 @@ test("getOverallScore computes the weighted combination and defaults to 60/40", 
   assert.equal(getOverallScore(9, 3, 90), 8.4);
   assert.equal(getOverallScore(9, 3, 0), 3);
   assert.equal(getOverallScore(9, 3, 100), 9);
-});
-
-test("import-notification's getOverallEvaluationScore stays consistent with the canonical ranking formula", () => {
-  for (const [preferenceScore, dealScore, preferenceWeightPercent] of [
-    [8, 7, 60],
-    [9, 3, 20],
-    [3, 9, 80],
-    [5, 5, 0],
-    [5, 5, 100],
-  ] as const) {
-    assert.equal(
-      getOverallEvaluationScore(preferenceScore, dealScore, preferenceWeightPercent),
-      getOverallScore(preferenceScore, dealScore, preferenceWeightPercent),
-    );
-  }
 });
 
 test("the dashboard SQL's rounded weighted formula agrees with the canonical formula", () => {

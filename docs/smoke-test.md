@@ -357,16 +357,15 @@ Check the non-production Slack channel.
 
 Expected observable result: one new message from the finalization step
 (`finalizeEvaluationRun` → `formatImportSlackMessage`), with the import
-summary showing `1 evaluated`. The evaluated product appears as the
-"Zalando recommendation" (`selectZalandoFallbackRecommendation`) or the
-"Vinted recommendation" (`selectVintedRecommendation`) for its source only
-when its unrounded Overall score is at least 7
-(`docs/recommendation-policy.md`); a message without a recommendation is then
-correct, not a failure. Since #89, a watched historical-low event is not a
-Zalando recommendation: a Watched Zalando product with one gets a separate
-"DealRadar Watched alert" message (reason "Historical low"), stored in
-`watched_alerts`, and the run's `evaluation_runs.watched_historical_lows` is
-only a diagnostic record.
+summary showing `1 evaluated`. Since #90 the message is operational only: the
+summary line and, when the import had partial scans, the scan-warning block.
+It has no recommendation entries ("Zalando recommendation" or "Vinted
+recommendation"), and the evaluated product is not named in it. Recommendations
+are the Daily summary's Best matches (`docs/recommendation-policy.md`), which
+appear only when an Active monitor exists. A watched historical-low event
+gives a separate "DealRadar Watched alert" message (reason "Historical low"),
+stored in `watched_alerts`, and the run's
+`evaluation_runs.watched_historical_lows` is only a diagnostic record.
 
 ## Real vs mocked/fixture-backed boundaries
 
