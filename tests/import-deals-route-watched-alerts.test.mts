@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { after, mock, test } from "node:test";
 
-// Route-level Watched alerts (#81, design D12/D13): detected from the
-// snapshots this import inserted, suppressed by a watched historical-low event
-// for the same product and observation (P4(ii)), delivered right after
-// detection, and never failing the import.
+// Route-level Watched alerts (#81, #89, design D12/D13, P4(c)): detected from
+// the snapshots this import inserted, with a watched historical-low event
+// stored as a historical_low alert of the same product and observation,
+// delivered right after detection as one message per product and
+// observation, and never failing the import.
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalGeminiApiKey = process.env.GEMINI_API_KEY;
@@ -21,6 +22,7 @@ type StoredAlert = Record<string, unknown> & { status: string; claimToken: strin
 const watchedUrl = "https://www.zalando.dk/items/watched-shoe";
 let snapshotInserted = true;
 let historicalLowHistory = false;
+let monitorMember = true;
 let detectionFails = false;
 let alertSlackFails = false;
 let storedAlerts: StoredAlert[] = [];
@@ -48,28 +50,30 @@ function rowsFor(text: string, values: unknown[]) {
         ]
       : [];
   }
-  if (text.includes("p.external_url")) {
-    return [{
-      productId: "5", externalUrl: watchedUrl, title: "Watched shoe", source: "zalando.dk", brand: null,
-      currentPrice: "450.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null,
-      hidden: false, watched: true, preferenceScore: null, dealScore: null,
-    }];
-  }
-  // Watched alert detection.
-  if (text.includes("jsonb_agg(")) return alertHistory;
+  // Watched alert detection: the product is in the monitor only when
+  // monitorMember is set.
+  if (text.includes("jsonb_agg(")) return monitorMember ? alertHistory : [];
   if (text.includes("INSERT INTO watched_alerts")) {
     alertInserts += 1;
     for (const row of JSON.parse(values[0] as string) as Array<Record<string, unknown>>) {
-      if (storedAlerts.some((alert) => alert.monitorId === row.monitor_id && alert.snapshotId === row.snapshot_id)) continue;
+      if (storedAlerts.some((alert) =>
+        alert.reason === row.reason && alert.monitorId === row.monitor_id && alert.snapshotId === row.snapshot_id
+      )) continue;
+      const historicalLow = row.reason === "historical_low";
       storedAlerts.push({
         alertId: String(storedAlerts.length + 1), productId: row.product_id, monitorId: row.monitor_id,
-        snapshotId: row.snapshot_id, discountPercent: String(row.discount_percent), thresholdPercent: String(row.threshold_percent),
+        snapshotId: row.snapshot_id,
+        discountPercent: historicalLow ? null : String(row.discount_percent),
+        thresholdPercent: historicalLow ? null : String(row.threshold_percent),
+        dropPercent: historicalLow ? String(row.drop_percent) : null,
         reason: row.reason, clientMessageId: "alert-client-id",
         title: "Watched shoe", externalUrl: watchedUrl, source: "zalando.dk",
-        watched: true, hidden: false, member: true, monitorActive: true,
-        displayName: "Zalando – shoes", currentThresholdPercent: "20.00",
-        productCurrentPrice: "450.00", productCurrency: "DKK", productDiscountPercent: "25.00",
+        watched: true, hidden: false, member: !historicalLow, monitorActive: !historicalLow,
+        displayName: historicalLow ? null : "Zalando – shoes", currentThresholdPercent: historicalLow ? null : "20.00",
+        productCurrentPrice: "450.00", productCurrency: "DKK", productSourceCurrentPrice: null, productSourceCurrency: null,
+        productDiscountPercent: "25.00",
         observedPrice: "450.00", observedCurrency: "DKK", observedSourcePrice: null, observedSourceCurrency: null,
+        observedDiscountPercent: "25.00",
         preferenceScore: null, dealScore: null,
         status: "pending", claimToken: null,
       });
@@ -201,6 +205,7 @@ async function runImport() {
 function reset() {
   snapshotInserted = true;
   historicalLowHistory = false;
+  monitorMember = true;
   detectionFails = false;
   alertSlackFails = false;
   storedAlerts = [];
@@ -235,27 +240,52 @@ test("a crossing is stored and delivered right after detection, once, and an imp
   assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /);
 });
 
-test("P4(ii): a watched historical-low event for the same product and observation suppresses the Watched alert", async () => {
+test("P4(c): a historical low and a crossing of the same observation are stored and sent as one Watched alert, with no legacy Zalando recommendation", async () => {
   reset();
   historicalLowHistory = true;
-  const suppressed = await runImport();
+  const result = await runImport();
 
-  assert.equal(suppressed.status, 200);
-  assert.equal(alertInserts, 0, "no Watched alert is stored");
-  assert.equal(slackDeliveries.length, 1, "no Watched alert is sent");
-  assert.match(
-    slackDeliveries[0]!.message,
-    /^DealRadar updated: [\s\S]*Zalando recommendation:\nWatched shoe\n450\.00 DKK/,
-    "the legacy message keeps the historical-low recommendation",
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(alertInserts, 2, "threshold and historical-low rows are inserted independently");
+  assert.deepEqual(
+    storedAlerts.map((alert) => [alert.reason, alert.monitorId, alert.snapshotId, alert.dropPercent]),
+    [["crossing", "zalando-shoes", "51", null], ["historical_low", null, "51", "25"]],
+    "the threshold alert is not suppressed",
   );
+  assert.equal(slackDeliveries.length, 2);
+  assert.equal(
+    slackDeliveries[0]!.message,
+    "*DealRadar Watched alert*\nWatched shoe\n450.00 DKK · 25% discount · " +
+      `<${watchedUrl}|View product>\n` +
+      "• Historical low: 25% below the previous price, at or below its lowest earlier price\n" +
+      "• Zalando – shoes: crossed the 20% threshold",
+  );
+  assert.match(slackDeliveries[1]!.message, /^DealRadar updated: /);
+  assert.doesNotMatch(slackDeliveries[1]!.message, /Zalando recommendation/, "the historical low left the per-import message");
+  assert.deepEqual(storedAlerts.map((alert) => alert.status), ["sent", "sent"]);
 
-  // The legacy output is the same as when no Watched alert is detected.
-  const legacyMessage = slackDeliveries[0]!.message;
+  // Same ref again: no inserted snapshot, so no second row and no message.
+  snapshotInserted = false;
+  const retry = await runImport();
+  assert.equal(retry.status, 200);
+  assert.equal(alertInserts, 2);
+  assert.equal(storedAlerts.length, 2);
+  assert.equal(slackDeliveries.length, 1);
+  assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /);
+});
+
+test("a historical low creates a Watched alert for a product in no discount_threshold monitor", async () => {
   reset();
   historicalLowHistory = true;
-  detectionFails = true;
-  await runImport();
-  assert.deepEqual(slackDeliveries.map((delivery) => delivery.message), [legacyMessage]);
+  monitorMember = false;
+  const result = await runImport();
+
+  assert.equal(result.status, 200);
+  assert.deepEqual(storedAlerts.map((alert) => [alert.reason, alert.snapshotId, alert.status]), [["historical_low", "51", "sent"]]);
+  assert.equal(slackDeliveries.length, 2);
+  assert.match(slackDeliveries[0]!.message, /^\*DealRadar Watched alert\*\n[\s\S]*\n• Historical low: 25% below the previous price, at or below its lowest earlier price$/);
+  assert.doesNotMatch(slackDeliveries[1]!.message, /Zalando recommendation/);
 });
 
 test("a detection failure is logged and never fails the import", async () => {

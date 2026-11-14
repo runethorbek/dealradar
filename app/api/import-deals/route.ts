@@ -17,17 +17,12 @@ import {
 } from "@/lib/monitor-definitions.mts";
 import { defaultVintedSettings, parseVintedSettings } from "@/lib/vinted-settings.mts";
 import { defaultGeminiSettings, parseGeminiSettings } from "@/lib/gemini-settings.mts";
-import { defaultRankingSettings, parseRankingSettings } from "@/lib/ranking-settings.mts";
 import {
   formatImportSlackMessage,
   parsePartialScanWarning,
   zalandoSource,
 } from "@/lib/import-notification.mts";
-import {
-  findWatchedHistoricalLows,
-  loadWatchedHistoricalLowCandidates,
-  selectWatchedHistoricalLowRecommendation,
-} from "@/lib/watched-historical-low.mts";
+import { findWatchedHistoricalLows } from "@/lib/watched-historical-low.mts";
 import {
   deliverPendingWatchedAlerts,
   recordWatchedAlerts,
@@ -421,11 +416,10 @@ export async function POST(request: Request) {
       (result) => result.inserted,
     ).length;
     const [storedSettings] = await sql`
-      SELECT vinted, gemini, ranking FROM application_settings WHERE id = 1
+      SELECT vinted, gemini FROM application_settings WHERE id = 1
     `;
     const vintedSettings = parseVintedSettings(storedSettings?.vinted) ?? defaultVintedSettings;
     const geminiSettings = parseGeminiSettings(storedSettings?.gemini) ?? defaultGeminiSettings;
-    const preferenceWeightPercent = (parseRankingSettings(storedSettings?.ranking) ?? defaultRankingSettings).preferenceWeightPercent;
     const preselection = selectEvaluationCandidatesWithPreselection(importResults, vintedSettings, geminiSettings.automaticEvaluationLimit);
     const evaluationCandidates = preselection.candidates;
     const productsUpdated = products.length - productsInserted;
@@ -433,9 +427,10 @@ export async function POST(request: Request) {
       (result) => result.snapshotId,
     ).length;
     // Watched historical-low events depend on the snapshots inserted by this
-    // import, so they are detected now and recorded with any evaluation run.
-    // Products are already persisted, so a detection failure only degrades the
-    // Zalando recommendation to its fallback instead of failing the import.
+    // import, so they are detected now, recorded as Watched alerts (P4(c)),
+    // and kept with any evaluation run as a diagnostic record. Products are
+    // already persisted, so a detection failure only loses this import's
+    // historical-low alerts instead of failing the import.
     let watchedHistoricalLows: Awaited<ReturnType<typeof findWatchedHistoricalLows>> = [];
     try {
       watchedHistoricalLows = await findWatchedHistoricalLows(
@@ -447,11 +442,12 @@ export async function POST(request: Request) {
     } catch {
       console.warn("DealRadar watched historical-low detection failed.");
     }
-    // Watched alerts (#81, design D12/D13) are detected from the same inserted
-    // snapshots, suppressed where a watched historical-low event exists for
-    // the product (P4(ii)), and delivered right away. A detection or delivery
-    // failure is logged and never fails the import; pending alerts are retried
-    // with the daily notifications and by later imports.
+    // Watched alerts (#81, #89, design D12/D13, P4(c)) are detected from the
+    // same inserted snapshots, stored together with the historical-low events,
+    // and delivered right away, one message per product and observation. A
+    // detection or delivery failure is logged and never fails the import;
+    // pending alerts are retried with the daily notifications and by later
+    // imports.
     let watchedAlertsDetected = 0;
     try {
       watchedAlertsDetected = (await recordWatchedAlerts(
@@ -504,19 +500,13 @@ export async function POST(request: Request) {
       }
     }
     console.info("DealRadar durable evaluation initiated.", { ...preselection.metrics, evaluationRunId });
-    // A watched historical-low event is the only Zalando recommendation an
-    // import with no evaluation candidates can have: the Zalando fallback (#60)
-    // and the Vinted recommendation use products evaluated in this import.
-    const zalandoHighlight = evaluationCandidates.length === 0
-      ? selectWatchedHistoricalLowRecommendation(
-          await loadWatchedHistoricalLowCandidates(sql, watchedHistoricalLows),
-          preferenceWeightPercent,
-        )
-      : null;
     // There is no durable work to finalize when nothing was selected, so retain
     // one useful import notification without creating a stranded empty run.
+    // It has no recommendation: the Zalando fallback (#60) and the Vinted
+    // recommendation use products evaluated in this import, and a watched
+    // historical-low event is a Watched alert since #89.
     if (evaluationCandidates.length === 0) {
-      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, { zalando: zalandoHighlight, vinted: null }, partialScanWarnings);
+      const slackMessage = formatImportSlackMessage({ ref, productsProcessed: products.length, productsInserted, productsUpdated, snapshotsInserted, productsEvaluated: 0 }, { zalando: null, vinted: null }, partialScanWarnings);
       try {
         const slackResult = await postSlackMessage(slackMessage);
         if (!slackResult.success) console.warn(`DealRadar Slack notification failed: ${slackResult.error}.`);

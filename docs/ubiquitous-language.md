@@ -49,25 +49,22 @@ The Watchlist includes both visible and hidden watched products. Hidden
 products remain clearly identified as Hidden there; Watch does not change
 their visibility.
 
-Watch records persistent explicit interest. In the recommendation policy
-(`docs/recommendation-policy.md`), a visible Watched Zalando product with a
-**watched historical-low event** in the current import receives first
-Zalando recommendation priority. A watched historical-low event is a price
-transition: the new same-currency observation is strictly lower than the
-previous observation and at or below the lowest earlier same-currency
-observation. Remaining at the same low price is not a new event. Watch gives no
-recommendation priority for Vinted. This does not change dashboard ranking,
-visibility, or evaluation input.
+Watch records persistent explicit interest. Its effect is **Watched alerts**
+(see `docs/recommendation-policy.md`): a visible Watched product can receive a
+Watched alert from each Active `discount_threshold` monitor it belongs to (since
+#81), and a visible Watched Zalando product receives one when it has a
+**watched historical-low event**, whether or not it belongs to any monitor
+(since #89). A watched historical-low event is a price transition: the new
+same-currency observation is strictly lower than the previous observation and
+at or below the lowest earlier same-currency observation. Remaining at the same
+low price is not a new event.
 
-Since #81, a visible Watched product can also receive a **Watched alert** from
-each Active `discount_threshold` monitor it belongs to. Watched state itself
-stays independent of monitor configuration: watching does not add a product to
-a monitor, and there are no per-product target prices.
-
-Since #60, the watched historical-low event is the only recommendation
-priority Watch gives in production: a Watched Zalando price drop that is not a
-watched historical-low event gives no priority, and Watch gives no Vinted
-priority.
+Watch gives no recommendation priority in the per-import message, for Zalando
+or Vinted. Until #89, a watched historical-low event gave first Zalando
+recommendation priority there; since #89 it is a Watched alert reason instead.
+Watch does not change dashboard ranking, visibility, or evaluation input.
+Watched state itself stays independent of monitor configuration: watching does
+not add a product to a monitor, and there are no per-product target prices.
 
 ## Preference score
 
@@ -132,8 +129,9 @@ Overall score is a ranking mechanism, not an independent AI judgment.
 ## Recommendation
 
 A product surfaced because DealRadar considers it sufficiently relevant based
-on its current evaluation and ranking, or because a Watched product reached a
-watched historical-low event.
+on its current evaluation and ranking. Since #89, a Watched product that
+reached a watched historical-low event is no longer a Recommendation; it gets a
+Watched alert.
 
 Recommendations are per source: an import has at most one Vinted
 recommendation and at most one Zalando recommendation, and the sources are
@@ -146,7 +144,7 @@ Since #60, both the Vinted and the Zalando recommendation follow the policy.
 See "Current production paths" in `docs/recommendation-policy.md`.
 
 During the parallel run (since #80), a Recommendation has two forms: the
-per-source import recommendation above, which is unchanged, and the per-monitor
+per-source import recommendation above, and the per-monitor
 Best match in the Daily summary. Retiring the per-source form needs explicit
 approval (design D14, Phase 7).
 
@@ -226,20 +224,29 @@ Active monitor. It is separate from the per-import message.
 ## Watched alert
 
 A Slack notification about a visible Watched product, detected at import time
-from a new observation (an inserted snapshot that is the product's latest),
-for an Active `discount_threshold` monitor the product belongs to. The
-observation has a reliable Discount at or above the monitor's threshold, and
-either the Discount crosses the threshold (the previous priced observation was
-below it) or it is a new best in the Qualifying episode (its whole-percent
-Discount, rounded down, is above the highest in the episode). The baseline
-comes from stored history, so a product that already qualifies when it becomes
-Watched, or when a threshold is lowered, alerts only on its next new best. A
-product's first priced observation never alerts. `best_match` monitors give no Watched alerts. One message is sent per
-product and observation, listing every monitor that triggered, and at most
-once. A pending alert is not sent once the product is no longer Watched,
-visible, and qualifying; it expires. While the watched historical-low event
-remains separate, a Watched alert is not sent when that event occurred for the
-same product and observation.
+from a new observation (an inserted snapshot that is the product's latest). It
+has one or more reasons:
+
+- **Crossing** or **new best**, for an Active `discount_threshold` monitor the
+  product belongs to. The observation has a reliable Discount at or above the
+  monitor's threshold, and either the Discount crosses the threshold (the
+  previous priced observation was below it) or it is a new best in the
+  Qualifying episode (its whole-percent Discount, rounded down, is above the
+  highest in the episode). The baseline comes from stored history, so a product
+  that already qualifies when it becomes Watched, or when a threshold is
+  lowered, alerts only on its next new best. A product's first priced
+  observation never alerts. `best_match` monitors give no Watched alerts.
+- **Historical low** (since #89), for a Zalando product with a watched
+  historical-low event on the observation. It needs no monitor membership and
+  no Discount, and the alert states the drop versus the previous price.
+
+One message is sent per product and observation, listing every reason, and at
+most once. A historical low and threshold reasons of the same observation are
+the same message. A pending alert is not sent once it no longer holds; it
+expires. A threshold reason holds while the product is Watched, visible, and
+still qualifying for that monitor. A historical-low reason holds while the
+product is Watched and visible and its current price, in the same currency
+pair, is not higher than the alerted observation's price.
 
 ## Qualifying episode
 

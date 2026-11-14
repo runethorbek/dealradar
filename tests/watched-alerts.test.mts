@@ -12,7 +12,7 @@ import {
   type WatchedAlertSql,
 } from "../lib/watched-alerts.mts";
 
-// Watched alerts (#81; design D12, D13, P1(b)(i), P4(ii), P5(b), P6(a),
+// Watched alerts (#81, #89; design D12, D13, P1(b)(i), P4(c), P5(b), P6(a),
 // P10(a)).
 
 // An observation: a discount with a price, null for a priced observation with
@@ -35,10 +35,9 @@ function observation(entry: Entry, index: number, productId: string): WatchedAle
 function detect(
   entries: Entry[],
   thresholds: number[] = [20],
-  { source = "zalando.dk", inserted, suppressed = [] as string[] }: {
+  { source = "zalando.dk", inserted }: {
     source?: string;
     inserted?: string[];
-    suppressed?: string[];
   } = {},
 ) {
   const observations = entries.map((entry, index) => observation(entry, index, "1"));
@@ -51,7 +50,6 @@ function detect(
       observations,
     }],
     new Set(inserted ?? [observations.at(-1)!.snapshotId]),
-    new Set(suppressed),
   );
 }
 
@@ -157,11 +155,6 @@ test("the alerted observation needs a reliable discount at or above the threshol
   await t.test("out of range", () => assert.deepEqual(reasons([15, { discountPercent: "100.00" }]), []));
 });
 
-test("P4(ii): a watched historical-low event for the product suppresses its Watched alert", () => {
-  assert.deepEqual(detect([15, 25], [20], { suppressed: ["1"] }), []);
-  assert.equal(detect([15, 25], [20], { suppressed: ["2"] }).length, 1);
-});
-
 test("only inserted snapshots with a reliable discount are queried", () => {
   const result = (overrides: Record<string, unknown>) => ({
     source: "zalando.dk", snapshotId: "10", currentPrice: "500.00", currency: "DKK", discountPercent: "25.00", ...overrides,
@@ -220,29 +213,116 @@ test("detected alerts are inserted once per product, monitor, and snapshot", asy
 
   const insert = queries.find(({ query }) => query.includes("INSERT INTO watched_alerts"));
   assert.ok(insert);
-  assert.match(insert.query, /ON CONFLICT \(product_id, monitor_id, snapshot_id\) DO NOTHING/);
+  // One untargeted ON CONFLICT covers the (product, monitor, snapshot) key and
+  // the historical-low (product, snapshot) key of migration 032.
+  assert.match(insert.query, /ON CONFLICT DO NOTHING/);
   assert.match(insert.query, /md5\('dealradar:watched-alert:' \|\| r\.product_id::TEXT \|\| ':' \|\| r\.snapshot_id::TEXT\)/);
   assert.deepEqual(JSON.parse(insert.values[0] as string), [{
-    product_id: "5", monitor_id: "zalando-shoes", snapshot_id: "51", discount_percent: 25, threshold_percent: 20, reason: "crossing",
+    product_id: "5", monitor_id: "zalando-shoes", snapshot_id: "51", discount_percent: 25, threshold_percent: 20,
+    drop_percent: null, reason: "crossing",
   }]);
+});
 
-  const suppressed = recordingSql((query) => query.includes("FROM product_snapshots s") ? historyRows : []);
-  assert.deepEqual(await recordWatchedAlerts(suppressed.sql, ["51"], [{ productId: "5", dropPercent: 16.6667 }]), []);
-  assert.ok(suppressed.queries.every(({ query }) => !query.includes("INSERT INTO watched_alerts")), "suppressed: nothing stored");
+test("P4(c): threshold alerts are detected when a historical-low event exists, and the event is stored as a historical_low alert", async () => {
+  const { sql, queries } = recordingSql((query) => query.includes("FROM product_snapshots s") ? historyRows : []);
+
+  assert.deepEqual(await recordWatchedAlerts(sql, ["51"], [{ productId: "5", snapshotId: "51", dropPercent: 16.6667 }]), [
+    { productId: "5", monitorId: "zalando-shoes", snapshotId: "51", discountPercent: 25, thresholdPercent: 20, reason: "crossing" },
+    { productId: "5", snapshotId: "51", dropPercent: 16.6667, reason: "historical_low" },
+  ]);
+
+  const inserts = queries.filter(({ query }) => query.includes("INSERT INTO watched_alerts"));
+  assert.deepEqual(inserts.map(({ values }) => JSON.parse(values[0] as string)), [
+    [{ product_id: "5", monitor_id: "zalando-shoes", snapshot_id: "51", discount_percent: 25, threshold_percent: 20, drop_percent: null, reason: "crossing" }],
+    [{ product_id: "5", monitor_id: null, snapshot_id: "51", discount_percent: null, threshold_percent: null, drop_percent: 16.6667, reason: "historical_low" }],
+  ], "threshold and historical-low rows are inserted independently");
+});
+
+test("threshold and historical-low alerts are recorded independently: a failure in one is logged and does not lose the other", async (t) => {
+  const event = { productId: "5", snapshotId: "51", dropPercent: 16.6667 };
+  const record = async (fails: (query: string, values: unknown[]) => boolean) => {
+    const queries: string[] = [];
+    const warnings: unknown[] = [];
+    const sql: WatchedAlertSql = async (strings, ...values) => {
+      const query = strings.join("$parameter");
+      if (fails(query, values)) throw new Error("connection reset");
+      queries.push(query);
+      return query.includes("FROM product_snapshots s") ? historyRows : [];
+    };
+    const warn = console.warn;
+    console.warn = (message: unknown) => { warnings.push(message); };
+    try {
+      return { recorded: await recordWatchedAlerts(sql, ["51"], [event]), queries, warnings };
+    } finally {
+      console.warn = warn;
+    }
+  };
+  const insertOf = (reason: string) => (query: string, values: unknown[]) =>
+    query.includes("INSERT INTO watched_alerts") && String(values[0]).includes(`"reason":"${reason}"`);
+
+  await t.test("threshold detection query fails: the historical low is still stored", async () => {
+    const { recorded, queries, warnings } = await record((query) => query.includes("FROM product_snapshots s"));
+    assert.deepEqual(recorded, [{ ...event, reason: "historical_low" }]);
+    assert.equal(queries.filter((query) => query.includes("INSERT INTO watched_alerts")).length, 1);
+    assert.deepEqual(warnings, ["DealRadar Watched alert detection failed."]);
+  });
+
+  await t.test("threshold insert fails: the historical low is still stored", async () => {
+    const { recorded, warnings } = await record(insertOf("crossing"));
+    assert.deepEqual(recorded, [{ ...event, reason: "historical_low" }]);
+    assert.deepEqual(warnings, ["DealRadar Watched alert detection failed."]);
+  });
+
+  await t.test("historical-low insert fails: the threshold alert is still stored", async () => {
+    const { recorded, warnings } = await record(insertOf("historical_low"));
+    assert.deepEqual(recorded.map((candidate) => candidate.reason), ["crossing"]);
+    assert.deepEqual(warnings, ["DealRadar watched historical-low alert recording failed."]);
+  });
+});
+
+test("a historical-low event is stored without a monitor, a threshold transition, or a reliable discount", async () => {
+  // No inserted snapshot with a reliable discount, so no threshold query; the
+  // product is in no discount_threshold monitor.
+  const { sql, queries } = recordingSql(() => []);
+
+  assert.deepEqual(await recordWatchedAlerts(sql, [], [{ productId: "7", snapshotId: "71", dropPercent: 10 }]), [
+    { productId: "7", snapshotId: "71", dropPercent: 10, reason: "historical_low" },
+  ]);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0]!.query, /INSERT INTO watched_alerts/);
+  assert.deepEqual(JSON.parse(queries[0]!.values[0] as string), [
+    { product_id: "7", monitor_id: null, snapshot_id: "71", discount_percent: null, threshold_percent: null, drop_percent: 10, reason: "historical_low" },
+  ]);
+
+  const empty = recordingSql(() => []);
+  assert.deepEqual(await recordWatchedAlerts(empty.sql, [], []), []);
+  assert.equal(empty.queries.length, 0, "nothing detected, nothing stored");
 });
 
 function pendingRow(overrides: Partial<Record<keyof PendingWatchedAlert, unknown>> = {}) {
   return {
     alertId: "1", productId: "5", monitorId: "zalando-shoes", snapshotId: "51",
-    discountPercent: "25.00", thresholdPercent: "20.00", reason: "crossing", clientMessageId: "client-5-51",
+    discountPercent: "25.00", thresholdPercent: "20.00", dropPercent: null, reason: "crossing", clientMessageId: "client-5-51",
     title: "Watched <shoe>", externalUrl: "https://www.zalando.dk/shoe", source: "zalando.dk",
     watched: true, hidden: false, member: true, monitorActive: true,
     displayName: "Zalando – shoes", currentThresholdPercent: "20.00",
-    productCurrentPrice: "500.00", productCurrency: "DKK", productDiscountPercent: "25.00",
+    productCurrentPrice: "500.00", productCurrency: "DKK", productSourceCurrentPrice: null, productSourceCurrency: null,
+    productDiscountPercent: "25.00",
     observedPrice: "500.00", observedCurrency: "DKK", observedSourcePrice: null, observedSourceCurrency: null,
+    observedDiscountPercent: "25.00",
     preferenceScore: null, dealScore: null,
     ...overrides,
   };
+}
+
+// A pending historical_low row (migration 032): no monitor, discount, or
+// threshold, and the drop percent versus the previous observation.
+function historicalLowRow(overrides: Partial<Record<keyof PendingWatchedAlert, unknown>> = {}) {
+  return pendingRow({
+    alertId: "9", monitorId: null, discountPercent: null, thresholdPercent: null, dropPercent: "16.6667",
+    reason: "historical_low", member: false, monitorActive: false, displayName: null, currentThresholdPercent: null,
+    ...overrides,
+  });
 }
 
 // A store of pending rows behind the delivery queries. Claims and marks
@@ -395,6 +475,95 @@ test("P5(b): pending alerts that are no longer Watched, visible, and qualifying 
     assert.deepEqual(await deliverPendingWatchedAlerts({ sql, postSlackMessage }), { sent: 1, expired: 1 });
     assert.doesNotMatch(deliveries[0]!.message, /zalando-other/);
     assert.deepEqual([status("1"), status("2")], ["sent", "expired"]);
+  });
+});
+
+test("P4(c): a historical low and threshold alerts of the same observation go out as one message listing every reason", async () => {
+  const { sql, status } = deliverySql([
+    pendingRow(),
+    pendingRow({ alertId: "2", monitorId: "zalando-all-shoes", displayName: null, reason: "new_best", thresholdPercent: "15.00", currentThresholdPercent: "15.00" }),
+    historicalLowRow(),
+  ]);
+  const { deliveries, postSlackMessage } = slack();
+
+  assert.deepEqual(await deliverPendingWatchedAlerts({ sql, postSlackMessage }), { sent: 1, expired: 0 });
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]!.clientMessageId, "client-5-51", "the rows share client_message_id");
+  assert.equal(
+    deliveries[0]!.message,
+    "*DealRadar Watched alert*\n" +
+      "Watched &lt;shoe&gt;\n" +
+      "500.00 DKK · 25% discount · <https://www.zalando.dk/shoe|View product>\n" +
+      "• Historical low: 16.67% below the previous price, at or below its lowest earlier price\n" +
+      "• zalando-all-shoes: new best in the qualifying episode (threshold 15%)\n" +
+      "• Zalando – shoes: crossed the 20% threshold",
+  );
+  assert.deepEqual(["1", "2", "9"].map(status), ["sent", "sent", "sent"]);
+});
+
+test("a historical low alone is delivered without a monitor, with the observation's discount only when it is reliable", async () => {
+  const { sql, status } = deliverySql([
+    historicalLowRow(),
+    historicalLowRow({ alertId: "10", productId: "6", snapshotId: "61", clientMessageId: "client-6-61", observedDiscountPercent: null }),
+  ]);
+  const { deliveries, postSlackMessage } = slack();
+
+  assert.deepEqual(await deliverPendingWatchedAlerts({ sql, postSlackMessage }), { sent: 2, expired: 0 });
+  assert.equal(
+    deliveries[0]!.message,
+    "*DealRadar Watched alert*\n" +
+      "Watched &lt;shoe&gt;\n" +
+      "500.00 DKK · 25% discount · <https://www.zalando.dk/shoe|View product>\n" +
+      "• Historical low: 16.67% below the previous price, at or below its lowest earlier price",
+  );
+  assert.match(deliveries[1]!.message, /\n500\.00 DKK · <https:/, "no detected discount: none is shown");
+  assert.deepEqual([status("9"), status("10")], ["sent", "sent"]);
+});
+
+test("P5(b): a pending historical-low alert is delivered only while the product is Watched, visible, and still at most the alerted price", async (t) => {
+  const cases: Array<[string, Partial<Record<keyof PendingWatchedAlert, unknown>>, "sent" | "expired"]> = [
+    ["still low: delivered", {}, "sent"],
+    ["price fallen further: delivered", { productCurrentPrice: "450.00" }, "sent"],
+    ["price since raised: expired", { productCurrentPrice: "500.01" }, "expired"],
+    ["no longer Watched: expired", { watched: false }, "expired"],
+    ["Hidden: expired", { hidden: true }, "expired"],
+    ["currency changed: expired", { productCurrency: "EUR" }, "expired"],
+    ["current price unknown: expired", { productCurrentPrice: null }, "expired"],
+    // The detection compared the source pair, so delivery compares it too.
+    ["source pair still low although the normalized price rose: delivered", {
+      observedSourcePrice: "60.00", observedSourceCurrency: "EUR", productSourceCurrentPrice: "60.00", productSourceCurrency: "EUR",
+      productCurrentPrice: "520.00",
+    }, "sent"],
+    ["source pair raised: expired", {
+      observedSourcePrice: "60.00", observedSourceCurrency: "EUR", productSourceCurrentPrice: "61.00", productSourceCurrency: "EUR",
+    }, "expired"],
+  ];
+
+  for (const [name, overrides, expected] of cases) {
+    await t.test(name, async () => {
+      const { sql, status } = deliverySql([historicalLowRow(overrides)]);
+      const { deliveries, postSlackMessage } = slack();
+
+      assert.deepEqual(
+        await deliverPendingWatchedAlerts({ sql, postSlackMessage }),
+        expected === "sent" ? { sent: 1, expired: 0 } : { sent: 0, expired: 1 },
+      );
+      assert.equal(deliveries.length, expected === "sent" ? 1 : 0);
+      assert.equal(status("9"), expected);
+    });
+  }
+
+  await t.test("threshold deliverability is unchanged: an expired historical low leaves the threshold alert in its message", async () => {
+    // The price rose above the alerted 500.00, but the discount still qualifies.
+    const { sql, status } = deliverySql([
+      pendingRow({ productCurrentPrice: "600.00" }),
+      historicalLowRow({ productCurrentPrice: "600.00" }),
+    ]);
+    const { deliveries, postSlackMessage } = slack();
+
+    assert.deepEqual(await deliverPendingWatchedAlerts({ sql, postSlackMessage }), { sent: 1, expired: 1 });
+    assert.doesNotMatch(deliveries[0]!.message, /Historical low/);
+    assert.deepEqual([status("1"), status("9")], ["sent", "expired"]);
   });
 });
 

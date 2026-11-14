@@ -326,9 +326,10 @@ Gemini call succeeding.
   `lib/import-notification.mts`). It references the evaluated product as the
   Zalando recommendation (`selectZalandoFallbackRecommendation`) or as the
   Vinted recommendation (`selectVintedRecommendation`) only when its unrounded
-  Overall score is at least 7. For Zalando, a still-visible Watched Zalando
-  product named in the run's `watched_historical_lows` takes precedence; see
-  `docs/recommendation-policy.md`. A message without a recommendation is
+  Overall score is at least 7. A product named in the run's
+  `watched_historical_lows` is not a Zalando recommendation since #89: it is a
+  `historical_low` row in `watched_alerts`, sent as a separate Watched alert
+  (see `docs/recommendation-policy.md`). A message without a recommendation is
   correct when neither applies.
 - **Likely subsystem if it fails**, given Checkpoint 8 already confirmed the
   evaluation is persisted and `evaluation_runs.status = 'completed'`:

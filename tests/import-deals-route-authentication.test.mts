@@ -21,7 +21,6 @@ let storedGeminiSettings: unknown;
 let storedRankingSettings: unknown;
 let snapshotHistoryRows: Record<string, unknown>[] = [];
 let snapshotHistoryFails = false;
-let watchedHistoricalLowRows: Record<string, unknown>[] = [];
 let evaluationRunInputs: Array<Record<string, unknown>> = [];
 const slackMessages: string[] = [];
 
@@ -50,9 +49,7 @@ mockModule("@neondatabase/serverless", {
             ? [{ vinted: undefined, gemini: storedGeminiSettings, ranking: storedRankingSettings }]
             : query.text.includes("FROM product_snapshots")
               ? snapshotHistoryRows
-              : query.text.includes("p.external_url")
-                ? watchedHistoricalLowRows
-                : []),
+              : []),
       });
     };
 
@@ -144,7 +141,6 @@ function reset() {
   storedRankingSettings = undefined;
   snapshotHistoryRows = [];
   snapshotHistoryFails = false;
-  watchedHistoricalLowRows = [];
   evaluationRunInputs = [];
   slackMessages.length = 0;
 }
@@ -483,14 +479,9 @@ function watchedHistoricalLowSetup(inserted: boolean) {
     { snapshotId: "51", productId: "5", currentPrice: "600.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null },
     { snapshotId: "52", productId: "5", currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null },
   ];
-  watchedHistoricalLowRows = [{
-    productId: "5", externalUrl: watchedUrl, title: "Watched shoe", source: "zalando.dk", brand: null,
-    currentPrice: "500.00", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null,
-    hidden: false, watched: true, preferenceScore: null, dealScore: null,
-  }];
 }
 
-test("zero-candidate imports give a watched historical-low event first Zalando priority", async () => {
+test("zero-candidate imports record a watched historical-low event as a Watched alert, not as a Zalando recommendation", async () => {
   reset();
   watchedHistoricalLowSetup(false);
 
@@ -501,8 +492,15 @@ test("zero-candidate imports give a watched historical-low event first Zalando p
   const snapshotQueries = persistedQueries.filter((query) => query.text.includes("FROM product_snapshots"));
   assert.equal(snapshotQueries.length, 1, "one snapshot-history query per import");
   assert.deepEqual(snapshotQueries[0]!.values[0], ["52", "62"]);
+  const alertInserts = persistedQueries.filter((query) => query.text.includes("INSERT INTO watched_alerts"));
+  assert.equal(alertInserts.length, 1);
+  assert.deepEqual(JSON.parse(alertInserts[0]!.values[0] as string), [{
+    product_id: "5", monitor_id: null, snapshot_id: "52", discount_percent: null, threshold_percent: null,
+    drop_percent: 16.6667, reason: "historical_low",
+  }]);
+  assert.equal(persistedQueries.some((query) => query.text.includes("p.external_url")), false, "no historical-low candidate query");
   assert.equal(slackMessages.length, 1);
-  assert.match(slackMessages[0]!, /Zalando recommendation:\nWatched shoe\n500\.00 DKK/);
+  assert.doesNotMatch(slackMessages[0]!, /Zalando recommendation:/);
 });
 
 test("zero-candidate imports have no Zalando recommendation without an event", async () => {
@@ -514,12 +512,12 @@ test("zero-candidate imports have no Zalando recommendation without an event", a
   const response = await POST(importRequest("Bearer valid-ingest-key"));
 
   assert.equal(response.status, 200);
-  assert.equal(persistedQueries.some((query) => query.text.includes("p.external_url")), false);
+  assert.equal(persistedQueries.some((query) => query.text.includes("INSERT INTO watched_alerts")), false);
   assert.equal(slackMessages.length, 1);
   assert.doesNotMatch(slackMessages[0]!, /Zalando recommendation:/);
 });
 
-test("imports with evaluation candidates record watched historical-low events with the run", async () => {
+test("imports with evaluation candidates still record watched historical-low events with the run as a diagnostic record", async () => {
   reset();
   watchedHistoricalLowSetup(true);
 
@@ -529,7 +527,7 @@ test("imports with evaluation candidates record watched historical-low events wi
   assert.equal(evaluationRunsCreated, 1);
   assert.equal(slackCalls, 0);
   const importContext = evaluationRunInputs[0]!.importContext as Record<string, unknown>;
-  assert.deepEqual(importContext.watchedHistoricalLows, [{ productId: "5", dropPercent: 16.6667 }]);
+  assert.deepEqual(importContext.watchedHistoricalLows, [{ productId: "5", snapshotId: "52", dropPercent: 16.6667 }]);
 });
 
 test("a failed watched historical-low detection degrades to no event instead of failing the import", async () => {

@@ -67,25 +67,20 @@ Vinted products receive no special priority.
 
 ## Zalando recommendation
 
-Question answered: *has something I explicitly watch become a particularly
-good buying opportunity?* Otherwise: *what is the best current Zalando
-opportunity?*
+Question answered: *what is the best current Zalando opportunity?*
 
-1. **Watched historical-low event first.** If one or more visible Watched
-   Zalando products have a
-   [watched historical-low event](#watched-historical-low-event) in this
-   import, recommend the strongest one. There is no Overall threshold and no
-   evaluation is required for this step.
-   Ties: larger percentage drop versus the previous observation → higher
-   Overall → ascending product id. Overall here uses the product's current
-   stored evaluation, however old (a watched product may not have been
-   evaluated in this import). A product with a stored evaluation ranks above
-   one without.
-2. **Zalando fallback.** Otherwise, recommend the visible Zalando product
-   evaluated during this import with the highest Overall, provided Overall ≥ 7.
-   Ties: higher Overall → higher Deal score → ascending product id.
+**Zalando fallback.** Recommend the visible Zalando product evaluated during
+this import with the highest Overall, provided Overall ≥ 7. Ties: higher
+Overall → higher Deal score → ascending product id. Otherwise, Zalando has no
+recommendation.
 
-If neither step produces a product, Zalando has no recommendation.
+Since #89 (design P4(c)), a
+[watched historical-low event](#watched-historical-low-event) is no longer a
+Zalando recommendation step. It is a reason of a
+[Watched alert](#watched-alert), sent on its own with claim-and-retry delivery,
+so Watch gives no Zalando recommendation priority. (Until #89 it was step 1:
+the strongest visible Watched Zalando product with an event was recommended
+before the fallback, with no Overall threshold.)
 
 ## Watched historical-low event
 
@@ -121,9 +116,9 @@ occurs for a product in an import when all of the following hold:
    earlier observations (all stored history, no time window). The new price is
    less than or equal to the previous historical minimum.
 
-The **drop percentage** used for ranking is
-`(previous price − new price) / previous price × 100`, rounded to 4 decimal
-places so that nominally equal drops tie and the next tie-break decides.
+The **drop percentage**, stored with the Watched alert and shown in its
+message, is `(previous price − new price) / previous price × 100`, rounded to
+4 decimal places.
 
 Examples (same currency, product Watched and visible):
 
@@ -145,14 +140,13 @@ The price-pair preference itself is unchanged.
 Whether an event occurred is only known during the import (it depends on the
 inserted snapshot), so it is **detected at import time** with one
 snapshot-history query per import, over the stored history of visible Watched
-Zalando products that received a new observation. When the import has
-evaluation candidates, the Slack message is sent later by the evaluation
-finalizer, so the events (product id and drop percentage) are recorded with
-the evaluation run (`evaluation_runs.watched_historical_lows`, migration 026).
-When the recommendation is selected, the product's current state is re-read:
-a product that has been hidden or unwatched since the import no longer
-qualifies, and its current stored evaluation (if any) is used for the Overall
-tie-break.
+Zalando products that received a new observation. It does not require
+monitor membership. Since #89, each event is stored as a `historical_low`
+[Watched alert](#watched-alert) on the new observation and delivered with the
+Watched alerts. When the import has evaluation candidates, the events
+(product id, snapshot id, and drop percentage) are also still recorded with
+the evaluation run (`evaluation_runs.watched_historical_lows`, migration 026)
+as a diagnostic record; the per-import message no longer reads them.
 
 ## Daily summary
 
@@ -193,12 +187,16 @@ product, Best match, Discount, Fresh) are defined in
 
 Since #81, DealRadar also sends **Watched alerts** (design D10, D12, D13, P1,
 P4, P5, P6, P10 in `docs/specs/monitor-recommendation-design.md`). They run in
-parallel with the per-import message, which is unchanged. Terms (Watched
-alert, Qualifying episode, Active monitor, Discount) are defined in
-`docs/ubiquitous-language.md`.
+parallel with the per-import message. Since #89 (P4(c)), a watched
+historical-low event is a Watched alert reason and no longer part of the
+per-import message. Terms (Watched alert, Qualifying episode, Active monitor,
+Discount) are defined in `docs/ubiquitous-language.md`.
 
-- **Candidate.** For product *p*, monitor *M* with threshold *T*, and
-  observation *o*, all of these hold:
+A Watched alert has one of three reasons: **crossing** and **new best**, per
+`discount_threshold` monitor, and **historical low**, per product.
+
+- **Threshold candidate.** For product *p*, monitor *M* with threshold *T*,
+  and observation *o*, all of these hold:
   1. *p* is Watched and visible (not Hidden).
   2. *M* is an Active `discount_threshold` monitor and is in
      `p.monitor_ids` after this import. `best_match` monitors never alert.
@@ -217,20 +215,28 @@ alert, Qualifying episode, Active monitor, Discount) are defined in
   stored history: there is no alert at go-live or right after Watch.
 - **Example** (*T* = 20): 15 → 20 → 20 → 25 → 25 → 10 → 20 alerts on the
   second, fourth, and seventh observation (crossing, new best, crossing).
-- **Several monitors.** Each monitor is detected on its own. One Slack message
-  is sent per product and observation, listing every monitor that triggered
-  and why, with the observation's price and Discount and the stored Overall
-  when an evaluation exists.
-- **Watched historical-low event.** Until the two are merged (P4(c), after
-  this phase is verified), no Watched alert is stored or sent for a product
-  that has a watched historical-low event in the same import; that event is
-  for the same observation and stays in the per-import message.
+- **Historical-low candidate.** A
+  [watched historical-low event](#watched-historical-low-event) for *p* on
+  *o*: Watched, visible, Zalando, *o* inserted by this import and *p*'s latest
+  observation, with a price at or below every earlier comparable price and
+  below the previous one. It needs no monitor membership and no Discount. It
+  is detected whether or not a threshold candidate exists for the same
+  observation, and threshold candidates are detected whether or not it exists
+  (the P4(ii) suppression of #81 was removed in #89).
+- **One message per observation.** Each monitor is detected on its own. One
+  Slack message is sent per product and observation, listing every reason:
+  the historical low with its drop percentage first, then every monitor that
+  triggered and why. It shows the observation's price, its Discount when
+  reliable, and the stored Overall when an evaluation exists.
 - **Detection.** One snapshot-history query per import, next to the watched
   historical-low detection, over Watched, visible products in Active
   `discount_threshold` monitors that received a new snapshot with a reliable
-  Discount. Rows go to `watched_alerts` (migration 031), unique per (product,
-  monitor, snapshot) and inserted with `ON CONFLICT DO NOTHING`, so an import
-  retry adds nothing.
+  Discount. Rows go to `watched_alerts` (migrations 031 and 032) with
+  `ON CONFLICT DO NOTHING`: threshold rows are unique per (product, monitor,
+  snapshot), and `historical_low` rows, which have no monitor, threshold, or
+  Discount and store the drop percentage, are unique per (product, snapshot).
+  An import retry adds nothing. Threshold and historical-low rows are recorded
+  independently, so a failure in one is logged and does not lose the other.
 - **Delivery.** `deliverPendingWatchedAlerts` (`lib/watched-alerts.mts`) runs
   right after detection in the import route and again after the Daily summary
   (the Workflow step after the evaluation-run finalizer, or the import route's
@@ -238,10 +244,16 @@ alert, Qualifying episode, Active monitor, Discount) are defined in
   observation with a lease and token, sends with a client_msg_id derived from
   the product and snapshot, and marks them sent. A failed send releases the
   claim, and a later delivery retries it. A pending alert is expired instead
-  of sent once the product is no longer Watched, visible, and qualifying: the
-  monitor is still an Active `discount_threshold` monitor that lists the
+  of sent once it no longer holds (P5(b)). The product must still be Watched
+  and visible. For a threshold alert, the product must also still qualify:
+  the monitor is still an Active `discount_threshold` monitor that lists the
   product, and the product's current reliable Discount is at or above the
-  current threshold.
+  current threshold. For a historical-low alert, the product's current price
+  must not be higher than the alerted observation's price, in the same pair
+  the detection compared (the source pair when the observation has a source
+  price, otherwise the normalized pair) and the same currency; an unknown
+  price or a different currency expires it. An expired reason is left out of
+  the message; the other reasons of the observation are still sent.
 - **Failures.** A detection or delivery failure in the import route is logged
   and never fails the import. In the Workflow step, an alert failure makes
   the step throw only after the Daily summary was attempted, so the step's
@@ -269,22 +281,21 @@ terminal, over the run's completed evaluations. It implements
 [Vinted recommendation](#vinted-recommendation) as specified. An import with
 no evaluation candidates has no Vinted recommendation.
 
-**Zalando step 1** — `findWatchedHistoricalLows`
+**Zalando (fallback)** — `selectZalandoFallbackRecommendation`
+(`lib/import-notification.mts`), called from `lib/evaluation-finalization.mts`
+over the run's completed evaluations. It implements
+[Zalando recommendation](#zalando-recommendation) as specified, with the same
+Overall-based selection as Vinted. An import with no evaluation candidates has
+no Zalando recommendation, so its per-import message has no recommendation at
+all.
+
+**Watched historical-low events** — `findWatchedHistoricalLows`
 (`lib/watched-historical-low.mts`), called from
 `app/api/import-deals/route.ts` with the snapshots this import inserted for
-Zalando products, detects the events. `selectWatchedHistoricalLowRecommendation`
-implements [Zalando recommendation](#zalando-recommendation) step 1 as
-specified. It runs in the import route when there are no evaluation
-candidates, and otherwise in `lib/evaluation-finalization.mts` from the events
-recorded with the run.
-
-**Zalando step 2 (fallback)** — `selectZalandoFallbackRecommendation`
-(`lib/import-notification.mts`), called from `lib/evaluation-finalization.mts`
-over the run's completed evaluations only when step 1 selects nothing. It
-implements [Zalando recommendation](#zalando-recommendation) step 2 as
-specified, with the same Overall-based selection as Vinted. An import with no
-evaluation candidates has no Zalando fallback recommendation, so its only
-possible Zalando recommendation is a watched historical-low event.
+Zalando products, detects the events. Since #89 they are recorded by
+`recordWatchedAlerts` (`lib/watched-alerts.mts`) as Watched alerts; the
+per-import message does not use them (`selectWatchedHistoricalLowRecommendation`
+was removed).
 
 ## Implementation status
 
@@ -301,4 +312,7 @@ possible Zalando recommendation is a watched historical-low event.
 source). #59 added the Zalando watched historical-low step. #60 replaced the
 interim Zalando rules (the Watched/Liked/generic price-drop tiers for imports
 without evaluation candidates, and the highest rounded Overall without a
-threshold for imports with them) with the Zalando fallback.
+threshold for imports with them) with the Zalando fallback. #89 (S7a of the
+monitor recommendation design) moved the watched historical-low event from
+Zalando step 1 to a Watched alert reason, leaving the fallback as the only
+Zalando recommendation.

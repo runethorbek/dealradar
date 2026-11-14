@@ -15,11 +15,6 @@ import {
   type PartialScanWarning,
 } from "./import-notification.mts";
 import { defaultRankingSettings, parseRankingSettings } from "./ranking-settings.mts";
-import {
-  loadWatchedHistoricalLowCandidates,
-  parseWatchedHistoricalLows,
-  selectWatchedHistoricalLowRecommendation,
-} from "./watched-historical-low.mts";
 
 type FinalizationDependencies = {
   sql: EvaluationRunSql;
@@ -44,8 +39,7 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
   if (!claim) return { finalized: false, notificationSent: false };
 
   const [metadata] = await sql`
-    SELECT import_summary AS "importSummary", scan_warnings AS "scanWarnings",
-      watched_historical_lows AS "watchedHistoricalLows"
+    SELECT import_summary AS "importSummary", scan_warnings AS "scanWarnings"
     FROM evaluation_runs WHERE id = ${persistedRun.id}
   `;
   const recommendations = await sql`
@@ -69,12 +63,11 @@ export async function finalizeEvaluationRun({ sql, run, postSlackMessage }: Fina
   try {
     const [rankingSettings] = await sql`SELECT ranking FROM application_settings WHERE id = 1`;
     const preferenceWeightPercent = parseRankingSettings(rankingSettings?.ranking)?.preferenceWeightPercent ?? defaultRankingSettings.preferenceWeightPercent;
-    // Watched historical-low events were recorded at import time (#59); only
-    // when none is recommended does the Zalando fallback apply (#60).
-    const watchedHistoricalLowCandidates = await loadWatchedHistoricalLowCandidates(sql, parseWatchedHistoricalLows(metadata?.watchedHistoricalLows));
+    // The Zalando recommendation is the fallback (#60) only: a watched
+    // historical-low event is a Watched alert since #89, and the run's
+    // watched_historical_lows is a diagnostic record that is not read here.
     const sourceRecommendations = {
-      zalando: selectWatchedHistoricalLowRecommendation(watchedHistoricalLowCandidates, preferenceWeightPercent) ??
-        selectZalandoFallbackRecommendation(recommendations, preferenceWeightPercent),
+      zalando: selectZalandoFallbackRecommendation(recommendations, preferenceWeightPercent),
       vinted: selectVintedRecommendation(recommendations, preferenceWeightPercent),
     };
     const result = await postSlackMessage(formatImportSlackMessage(importSummary, sourceRecommendations, warnings), claim.clientMessageId);
