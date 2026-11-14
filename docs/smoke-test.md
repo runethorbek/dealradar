@@ -362,9 +362,11 @@ summary showing `1 evaluated`. The evaluated product appears as the
 "Vinted recommendation" (`selectVintedRecommendation`) for its source only
 when its unrounded Overall score is at least 7
 (`docs/recommendation-policy.md`); a message without a recommendation is then
-correct, not a failure. For Zalando, a visible Watched Zalando product with a
-watched historical-low event in this import (recorded in
-`evaluation_runs.watched_historical_lows`) takes precedence.
+correct, not a failure. Since #89, a watched historical-low event is not a
+Zalando recommendation: a Watched Zalando product with one gets a separate
+"DealRadar Watched alert" message (reason "Historical low"), stored in
+`watched_alerts`, and the run's `evaluation_runs.watched_historical_lows` is
+only a diagnostic record.
 
 ## Real vs mocked/fixture-backed boundaries
 

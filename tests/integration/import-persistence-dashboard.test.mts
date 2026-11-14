@@ -12,7 +12,7 @@ import {
   type NormalizedProduct,
 } from "@/lib/import-persistence.mts";
 import { getLatestDashboardProducts, type DashboardSql } from "@/lib/dashboard-product-query.mts";
-import { findWatchedHistoricalLows, loadWatchedHistoricalLowCandidates } from "@/lib/watched-historical-low.mts";
+import { findWatchedHistoricalLows } from "@/lib/watched-historical-low.mts";
 import {
   loadDefinedMonitorIds,
   normalizeProductMonitorIds,
@@ -23,13 +23,18 @@ import {
 import { loadActiveMonitorMembers } from "@/lib/monitor-recommendation-loader.mts";
 import { selectForMonitor } from "@/lib/monitor-recommendation.mts";
 import { produceDailySummary, type DailySummarySql } from "@/lib/daily-summary.mts";
-import { deliverPendingWatchedAlerts, recordWatchedAlerts } from "@/lib/watched-alerts.mts";
+import {
+  deliverPendingWatchedAlerts,
+  recordWatchedAlerts,
+  type WatchedAlertCandidate,
+} from "@/lib/watched-alerts.mts";
 
 const migrationsDir = fileURLToPath(new URL("../../migrations/", import.meta.url));
 
-function readMigrationsInOrder() {
+function readMigrationsInOrder({ from = 0, through = Infinity } = {}) {
   return readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
+    .filter((file) => Number(file.split("_")[0]) >= from && Number(file.split("_")[0]) <= through)
     .sort((a, b) => Number(a.split("_")[0]) - Number(b.split("_")[0]))
     .map((file) => readFileSync(path.join(migrationsDir, file), "utf8"));
 }
@@ -192,13 +197,8 @@ test("detects a watched historical-low event from real snapshot history", async 
   await observe(600, "2026-01-02T00:00:00.000Z");
   const returningLow = await observe(500, "2026-01-03T00:00:00.000Z");
   assert.deepEqual(await eventsFor(returningLow.snapshotId), [
-    { productId: first.productId, dropPercent: 16.6667 },
+    { productId: first.productId, snapshotId: returningLow.snapshotId, dropPercent: 16.6667 },
   ]);
-  const [candidate] = await loadWatchedHistoricalLowCandidates(sql as never, await eventsFor(returningLow.snapshotId));
-  assert.equal(candidate?.title, "Watched product");
-  assert.equal(candidate?.watched, true);
-  assert.equal(candidate?.currentPrice, "500.00");
-  assert.equal(candidate?.preferenceScore, null, "no stored evaluation is required");
 
   const reimport = await observe(500, "2026-01-03T00:00:00.000Z");
   assert.equal(reimport.snapshotId, null, "re-importing an existing observation inserts nothing");
@@ -716,7 +716,10 @@ test("applies migration 031: Watched alerts are detected once per product, monit
     ]);
     return result!;
   };
-  const detect = (snapshotId: string | null) => recordWatchedAlerts(sql as never, snapshotId ? [snapshotId] : []);
+  // Without historical-low events, only threshold candidates are recorded.
+  const detect = async (snapshotId: string | null) =>
+    (await recordWatchedAlerts(sql as never, snapshotId ? [snapshotId] : []))
+      .filter((candidate): candidate is WatchedAlertCandidate => candidate.reason !== "historical_low");
   const alertRows = async () => sql`
     SELECT monitor_id AS "monitorId", snapshot_id::TEXT AS "snapshotId", discount_percent::TEXT AS "discountPercent",
       threshold_percent::TEXT AS "thresholdPercent", reason, status, client_message_id AS "clientMessageId",
@@ -807,4 +810,167 @@ test("applies migration 031: Watched alerts are detected once per product, monit
   // 40% would be a new best, but Hidden products are excluded.
   await sql`UPDATE products SET watched = TRUE, hidden = TRUE WHERE id = ${first.productId}`;
   assert.deepEqual(await detect((await observe(40, "2026-10-24T03:00:00.000Z")).snapshotId), [], "Hidden products are excluded");
+});
+
+test("applies migration 032: a historical low is a Watched alert reason, unique per product and snapshot, merged with threshold alerts", async () => {
+  await sql`
+    INSERT INTO monitor_definitions (
+      monitor_id, source, display_name, enabled, strategy, minimum_discount_percent,
+      contract_version, definition, definition_ref, last_scan_checked_at
+    ) VALUES ('low-20', 'zalando.dk', 'Display low-20', TRUE, 'discount_threshold', 20, 1, '{}'::JSONB, 'ref', NOW())
+  `;
+  const externalUrl = "https://www.zalando.dk/historical-low-product";
+  const observe = async (currentPrice: number, discountPercent: number | null, observedAt: string) => {
+    const [result] = await persistImportedProducts(importSql, [
+      product({
+        externalUrl,
+        title: "Historical low product",
+        currentPrice,
+        discountPercent,
+        observedAt,
+        rawData: { monitor_ids: ["low-20"] },
+      }),
+    ]);
+    return result!;
+  };
+  // The import route's order: historical-low detection, then recording both.
+  const detect = async (snapshotId: string | null) => {
+    const inserted = snapshotId ? [snapshotId] : [];
+    return recordWatchedAlerts(sql as never, inserted, await findWatchedHistoricalLows(sql as never, inserted));
+  };
+  const alertRows = async (productId: string) => sql`
+    SELECT monitor_id AS "monitorId", snapshot_id::TEXT AS "snapshotId", discount_percent::TEXT AS "discountPercent",
+      threshold_percent::TEXT AS "thresholdPercent", drop_percent::TEXT AS "dropPercent", reason, status,
+      client_message_id AS "clientMessageId"
+    FROM watched_alerts
+    WHERE product_id = ${productId}
+    ORDER BY snapshot_id, reason
+  `;
+  const deliveries: string[] = [];
+  const deliver = () => deliverPendingWatchedAlerts({
+    sql: sql as never,
+    postSlackMessage: async (message) => {
+      deliveries.push(message);
+      return { success: true };
+    },
+  });
+
+  const first = await observe(600, 15, "2026-11-01T03:00:00.000Z");
+  await sql`UPDATE products SET watched = TRUE WHERE id = ${first.productId}`;
+  assert.deepEqual(await detect(first.snapshotId), [], "first observation");
+
+  // 600 → 500 at 25%: a historical low and a crossing of the same observation.
+  const low = await observe(500, 25, "2026-11-02T03:00:00.000Z");
+  assert.deepEqual((await detect(low.snapshotId)).map((candidate) => candidate.reason), ["crossing", "historical_low"]);
+  assert.equal((await detect(low.snapshotId)).length, 2, "a retried detection finds the same candidates");
+  const stored = await alertRows(first.productId);
+  const clientMessageId = stored[0]!.clientMessageId;
+  assert.deepEqual(stored.map((row) => ({ ...row })), [
+    {
+      monitorId: "low-20", snapshotId: low.snapshotId, discountPercent: "25.00", thresholdPercent: "20.00",
+      dropPercent: null, reason: "crossing", status: "pending", clientMessageId,
+    },
+    {
+      monitorId: null, snapshotId: low.snapshotId, discountPercent: null, thresholdPercent: null,
+      dropPercent: "16.6667", reason: "historical_low", status: "pending", clientMessageId,
+    },
+  ], "one row per reason, idempotent across retries, sharing client_message_id");
+
+  assert.deepEqual(await deliver(), { sent: 1, expired: 0 });
+  assert.equal(deliveries.length, 1, "one message per product and observation");
+  assert.match(
+    deliveries[0]!,
+    /^\*DealRadar Watched alert\*\nHistorical low product\n500\.00 DKK · 25% discount · <[^\n]+\n• Historical low: 16\.67% below the previous price, at or below its lowest earlier price\n• Display low-20: crossed the 20% threshold$/,
+  );
+  assert.deepEqual((await alertRows(first.productId)).map((row) => row.status), ["sent", "sent"]);
+
+  // At most one historical_low row per (product, snapshot), although
+  // monitor_id is NULL.
+  await assert.rejects(
+    sql`
+      INSERT INTO watched_alerts (product_id, snapshot_id, drop_percent, reason, client_message_id)
+      VALUES (${first.productId}, ${low.snapshotId}, 10, 'historical_low', 'x')
+    `,
+    (error: { code?: string }) => error.code === "23505",
+    "unique per (product, snapshot)",
+  );
+
+  // crossing and new_best still require monitor, threshold, and discount;
+  // historical_low rows have none of them and need a drop percent.
+  const newer = await observe(500, 25, "2026-11-03T03:00:00.000Z");
+  const invalidRows: Array<[string, {
+    monitorId: string | null;
+    discountPercent: number | null;
+    thresholdPercent: number | null;
+    dropPercent: number | null;
+    reason: string;
+  }]> = [
+    ["crossing without monitor", { monitorId: null, discountPercent: 25, thresholdPercent: 20, dropPercent: null, reason: "crossing" }],
+    ["crossing without threshold", { monitorId: "low-20", discountPercent: 25, thresholdPercent: null, dropPercent: null, reason: "crossing" }],
+    ["new_best without discount", { monitorId: "low-20", discountPercent: null, thresholdPercent: 20, dropPercent: null, reason: "new_best" }],
+    ["new_best with a drop percent", { monitorId: "low-20", discountPercent: 25, thresholdPercent: 20, dropPercent: 10, reason: "new_best" }],
+    ["historical_low without drop percent", { monitorId: null, discountPercent: null, thresholdPercent: null, dropPercent: null, reason: "historical_low" }],
+    ["historical_low with a monitor", { monitorId: "low-20", discountPercent: null, thresholdPercent: null, dropPercent: 10, reason: "historical_low" }],
+    ["historical_low with a discount", { monitorId: null, discountPercent: 25, thresholdPercent: null, dropPercent: 10, reason: "historical_low" }],
+    ["unknown reason", { monitorId: null, discountPercent: null, thresholdPercent: null, dropPercent: 10, reason: "price_drop" }],
+  ];
+  for (const [name, row] of invalidRows) {
+    await assert.rejects(
+      sql`
+        INSERT INTO watched_alerts (
+          product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, drop_percent, reason, client_message_id
+        ) VALUES (
+          ${first.productId}, ${row.monitorId}, ${newer.snapshotId}, ${row.discountPercent},
+          ${row.thresholdPercent}, ${row.dropPercent}, ${row.reason}, 'x'
+        )
+      `,
+      (error: { code?: string }) => error.code === "23514",
+      name,
+    );
+  }
+
+  // P5(b): a pending historical low expires once the current price rose above
+  // the alerted observation's price.
+  const lower = await observe(450, 25, "2026-11-04T03:00:00.000Z");
+  assert.deepEqual((await detect(lower.snapshotId)).map((candidate) => candidate.reason), ["historical_low"]);
+  await observe(550, 25, "2026-11-05T03:00:00.000Z");
+  assert.deepEqual(await deliver(), { sent: 0, expired: 1 });
+  assert.equal(deliveries.length, 1);
+});
+
+test("applies migration 032 additively: Watched alert rows stored under 031 are unchanged", async () => {
+  // A separate schema at migration 031, so 032 runs over existing rows.
+  const schema = "migration_032_additive";
+  const rows = async () => (await sql.unsafe(`SELECT row_to_json(a)::TEXT AS "row" FROM watched_alerts a ORDER BY id`))
+    .map((row) => JSON.parse(String(row.row)) as Record<string, unknown>);
+
+  try {
+    await sql.unsafe(`CREATE SCHEMA ${schema}; SET search_path TO ${schema}`);
+    for (const migration of readMigrationsInOrder({ through: 31 })) {
+      await sql.unsafe(migration);
+    }
+    await sql.unsafe(`
+      INSERT INTO products (source, external_url, title, watched) VALUES ('zalando.dk', 'https://www.zalando.dk/a', 'A', TRUE);
+      INSERT INTO product_snapshots (product_id, observed_at, current_price, currency, discount_percent)
+        VALUES (1, '2026-10-31T00:00:00Z', 500, 'DKK', 25), (1, '2026-11-01T00:00:00Z', 450, 'DKK', 30);
+      INSERT INTO monitor_definitions (
+        monitor_id, source, enabled, strategy, minimum_discount_percent, contract_version, definition, definition_ref
+      ) VALUES ('m-20', 'zalando.dk', TRUE, 'discount_threshold', 20, 1, '{}'::JSONB, 'ref');
+      INSERT INTO watched_alerts (
+        product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, reason, status, client_message_id, sent_at
+      ) VALUES
+        (1, 'm-20', 1, 25, 20, 'crossing', 'sent', 'client-1', '2026-11-01T00:00:00Z'),
+        (1, 'm-20', 2, 30, 20, 'new_best', 'pending', 'client-2', NULL);
+    `);
+    const before = await rows();
+    assert.equal(before.length, 2);
+
+    for (const migration of readMigrationsInOrder({ from: 32, through: 32 })) {
+      await sql.unsafe(migration);
+    }
+
+    assert.deepEqual(await rows(), before.map((row) => ({ ...row, drop_percent: null })), "existing rows are unchanged");
+  } finally {
+    await sql.unsafe(`SET search_path TO public; DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+  }
 });

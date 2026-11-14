@@ -112,11 +112,11 @@ test("records the import's watched historical-low events with the run", async ()
     candidateProductIds: ["42"],
     importContext: {
       productsProcessed: 1, productsInserted: 0, productsUpdated: 1, snapshotsInserted: 1, scanWarnings: [],
-      watchedHistoricalLows: [{ productId: "5", dropPercent: 12.5 }],
+      watchedHistoricalLows: [{ productId: "5", snapshotId: "51", dropPercent: 12.5 }],
     },
   });
 
-  assert.equal(values[3], JSON.stringify([{ productId: "5", dropPercent: 12.5 }]));
+  assert.equal(values[3], JSON.stringify([{ productId: "5", snapshotId: "51", dropPercent: 12.5 }]));
 });
 
 test("stores the import's daily summary date and monitor definitions warning in import_summary", async () => {

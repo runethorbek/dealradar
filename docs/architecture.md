@@ -186,8 +186,9 @@ pending, processing, completed, and failed candidate state determines recovery.
 Normal imports persist a selected run and enqueue that adapter before returning;
 they do not wait for Gemini. Once every selected candidate is terminal, the
 application finalizer reads the persisted run and evaluations, selects the
-per-source recommendations (using watched historical-low events that the
-import detected from its inserted snapshots and recorded with the run), and makes one claimed final Slack delivery attempt. Imports
+per-source recommendations from the run's completed evaluations, and makes one claimed final Slack delivery attempt. Watched historical-low events that the
+import detected from its inserted snapshots are Watched alerts since #89; the
+copy recorded with the run is a diagnostic record and is not read there. Imports
 with no selected candidates send the normal no-evaluation summary directly and
 do not create an empty durable run.
 

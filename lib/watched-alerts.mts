@@ -4,10 +4,12 @@ import { isReliableDiscount } from "./monitor-recommendation.mts";
 import { getOverallScore } from "./ranking-settings.mts";
 import type { WatchedHistoricalLowEvent } from "./watched-historical-low.mts";
 
-// Watched alerts (#81; design D12, D13, P1(b)(i), P4(ii), P5(b), P6(a), P10(a)
-// in docs/specs/monitor-recommendation-design.md). Detected at import time
-// from inserted snapshots, stored in watched_alerts (migration 031), and
-// delivered once per product and observation under a claim. No Next.js,
+// Watched alerts (#81, #89; design D12, D13, P1(b)(i), P4(c), P5(b), P6(a),
+// P10(a) in docs/specs/monitor-recommendation-design.md). Detected at import
+// time from inserted snapshots, stored in watched_alerts (migrations 031 and
+// 032), and delivered once per product and observation under a claim. The
+// reasons are a threshold transition per monitor (crossing, new_best) and a
+// watched historical-low event (historical_low, no monitor). No Next.js,
 // Gemini, or Vercel dependency.
 
 export type WatchedAlertSql = (
@@ -46,6 +48,11 @@ export type WatchedAlertCandidate = {
   discountPercent: number;
   thresholdPercent: number;
   reason: WatchedAlertReason;
+};
+
+// A watched historical-low event recorded as a Watched alert (P4(c)).
+export type WatchedHistoricalLowAlertCandidate = WatchedHistoricalLowEvent & {
+  reason: "historical_low";
 };
 
 function numericOrNull(value: string | null) {
@@ -101,22 +108,16 @@ export function getWatchedAlertTransition(
 }
 
 // Applies D12 conditions 3-5 to products that already meet conditions 1-2
-// (Watched, visible, in an active discount_threshold monitor). P4(ii): a
-// product with a watched historical-low event in this import produces no
-// Watched alert; both events belong to the product's latest inserted
-// observation, so the product id identifies the same observation.
+// (Watched, visible, in an active discount_threshold monitor).
 export function detectWatchedAlerts(
   products: WatchedAlertProduct[],
   insertedSnapshotIds: ReadonlySet<string>,
-  suppressedProductIds: ReadonlySet<string> = new Set(),
 ): WatchedAlertCandidate[] {
   return products.flatMap((product) => {
     const latest = product.observations.at(-1);
 
     // The inserted observation must be the product's latest.
-    if (!latest || !insertedSnapshotIds.has(latest.snapshotId) || suppressedProductIds.has(product.productId)) {
-      return [];
-    }
+    if (!latest || !insertedSnapshotIds.has(latest.snapshotId)) return [];
 
     const discount = numericOrNull(latest.discountPercent);
 
@@ -206,7 +207,6 @@ function parseMonitors(value: unknown): WatchedAlertMonitor[] {
 export async function findWatchedAlerts(
   sql: WatchedAlertSql,
   insertedSnapshotIds: string[],
-  watchedHistoricalLows: WatchedHistoricalLowEvent[] = [],
 ): Promise<WatchedAlertCandidate[]> {
   if (insertedSnapshotIds.length === 0) return [];
 
@@ -268,23 +268,26 @@ export async function findWatchedAlerts(
     });
   }
 
-  return detectWatchedAlerts(
-    [...products.values()],
-    new Set(insertedSnapshotIds),
-    new Set(watchedHistoricalLows.map((event) => event.productId)),
-  );
+  return detectWatchedAlerts([...products.values()], new Set(insertedSnapshotIds));
 }
 
-// Detects and stores this import's Watched alerts. Rows are unique per
-// (product, monitor, snapshot) and inserted with ON CONFLICT DO NOTHING, so
+// Detects and stores this import's Watched alerts: the threshold transitions,
+// and the watched historical-low events that findWatchedHistoricalLows
+// returned for this import as 'historical_low' rows, each on the product's
+// latest snapshot, inserted by this import (P4(c)). Threshold rows are unique
+// per (product, monitor, snapshot) and historical-low rows per (product,
+// snapshot); the one INSERT uses ON CONFLICT DO NOTHING for both keys, so
 // detection is idempotent. client_message_id is derived from the product and
 // snapshot, so every row of one message shares it.
 export async function recordWatchedAlerts(
   sql: WatchedAlertSql,
   insertedSnapshotIds: string[],
   watchedHistoricalLows: WatchedHistoricalLowEvent[] = [],
-): Promise<WatchedAlertCandidate[]> {
-  const candidates = await findWatchedAlerts(sql, insertedSnapshotIds, watchedHistoricalLows);
+): Promise<Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate>> {
+  const candidates: Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate> = [
+    ...await findWatchedAlerts(sql, insertedSnapshotIds),
+    ...watchedHistoricalLows.map((event) => ({ ...event, reason: "historical_low" as const })),
+  ];
 
   if (candidates.length === 0) return [];
 
@@ -296,50 +299,61 @@ export async function recordWatchedAlerts(
         r.snapshot_id,
         r.discount_percent,
         r.threshold_percent,
+        r.drop_percent,
         r.reason,
         md5('dealradar:watched-alert:' || r.product_id::TEXT || ':' || r.snapshot_id::TEXT) AS hash
-      FROM jsonb_to_recordset(${JSON.stringify(candidates.map((candidate) => ({
-        product_id: candidate.productId,
-        monitor_id: candidate.monitorId,
-        snapshot_id: candidate.snapshotId,
-        discount_percent: candidate.discountPercent,
-        threshold_percent: candidate.thresholdPercent,
-        reason: candidate.reason,
-      })))}::JSONB) AS r(
+      FROM jsonb_to_recordset(${JSON.stringify(candidates.map((candidate) => candidate.reason === "historical_low"
+        ? {
+            product_id: candidate.productId,
+            monitor_id: null,
+            snapshot_id: candidate.snapshotId,
+            discount_percent: null,
+            threshold_percent: null,
+            drop_percent: candidate.dropPercent,
+            reason: candidate.reason,
+          }
+        : {
+            product_id: candidate.productId,
+            monitor_id: candidate.monitorId,
+            snapshot_id: candidate.snapshotId,
+            discount_percent: candidate.discountPercent,
+            threshold_percent: candidate.thresholdPercent,
+            drop_percent: null,
+            reason: candidate.reason,
+          }))}::JSONB) AS r(
         product_id BIGINT,
         monitor_id TEXT,
         snapshot_id BIGINT,
         discount_percent NUMERIC,
         threshold_percent NUMERIC,
+        drop_percent NUMERIC,
         reason TEXT
       )
     )
     INSERT INTO watched_alerts (
-      product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, reason, client_message_id
+      product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, drop_percent, reason,
+      client_message_id
     )
     SELECT
-      product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, reason,
+      product_id, monitor_id, snapshot_id, discount_percent, threshold_percent, drop_percent, reason,
       concat(
         substr(hash, 1, 8), '-', substr(hash, 9, 4), '-4', substr(hash, 14, 3), '-8',
         substr(hash, 18, 3), '-', substr(hash, 21, 12)
       )
     FROM detected
-    ON CONFLICT (product_id, monitor_id, snapshot_id) DO NOTHING
+    ON CONFLICT DO NOTHING
   `;
 
   return candidates;
 }
 
 // A pending alert row with the current state needed to re-check it (P5(b))
-// and to format it.
-export type PendingWatchedAlert = {
+// and to format it. A 'historical_low' row has no monitor, discount, or
+// threshold and has a drop percent; a threshold row is the reverse.
+type PendingWatchedAlertState = {
   alertId: string;
   productId: string;
-  monitorId: string;
   snapshotId: string;
-  discountPercent: number;
-  thresholdPercent: number;
-  reason: WatchedAlertReason;
   clientMessageId: string;
   title: string;
   externalUrl: string;
@@ -352,24 +366,70 @@ export type PendingWatchedAlert = {
   currentThresholdPercent: number | null;
   productCurrentPrice: string | null;
   productCurrency: string | null;
+  productSourceCurrentPrice: string | null;
+  productSourceCurrency: string | null;
   productDiscountPercent: number | null;
   observedPrice: string | null;
   observedCurrency: string | null;
   observedSourcePrice: string | null;
   observedSourceCurrency: string | null;
+  observedDiscountPercent: number | null;
   preferenceScore: number | null;
   dealScore: number | null;
 };
 
-// P5(b): a pending alert is delivered only while the product is still
-// Watched, visible, and qualifying for that monitor: the monitor is an active
-// discount_threshold monitor, the product is still its member, and the
-// product's current reliable discount is at or above the current threshold
-// (D12 conditions 1, 2, and 4 on the current stored state).
-export function isDeliverableWatchedAlert(alert: PendingWatchedAlert) {
+export type PendingWatchedAlert = PendingWatchedAlertState & (
+  | {
+      reason: WatchedAlertReason;
+      monitorId: string;
+      discountPercent: number;
+      thresholdPercent: number;
+      dropPercent: null;
+    }
+  | {
+      reason: "historical_low";
+      monitorId: null;
+      discountPercent: null;
+      thresholdPercent: null;
+      dropPercent: number;
+    }
+);
+
+// P5(b) for a historical low: the product's current price, in the pair the
+// detection compared (the source pair when the alerted observation has a
+// source price, otherwise the normalized pair), is known, in the same
+// currency, and not higher than the alerted observation's price.
+function isStillHistoricalLow(alert: PendingWatchedAlert) {
+  const useSourcePair = alert.observedSourcePrice !== null;
+  const observedPrice = numericOrNull(useSourcePair ? alert.observedSourcePrice : alert.observedPrice);
+  const observedCurrency = useSourcePair ? alert.observedSourceCurrency : alert.observedCurrency;
+  const currentPrice = numericOrNull(useSourcePair ? alert.productSourceCurrentPrice : alert.productCurrentPrice);
+  const currentCurrency = useSourcePair ? alert.productSourceCurrency : alert.productCurrency;
+
   return (
-    alert.watched &&
-    !alert.hidden &&
+    observedPrice !== null &&
+    currentPrice !== null &&
+    currentPrice >= 0 &&
+    observedCurrency !== null &&
+    currentCurrency === observedCurrency &&
+    currentPrice <= observedPrice
+  );
+}
+
+// P5(b): a pending alert is delivered only while the product is still
+// Watched and visible, and the alert still holds. A threshold alert still
+// holds while the product qualifies for that monitor: the monitor is an
+// active discount_threshold monitor, the product is still its member, and the
+// product's current reliable discount is at or above the current threshold
+// (D12 conditions 1, 2, and 4 on the current stored state). A historical-low
+// alert still holds while the current price has not risen above the alerted
+// observation's price.
+export function isDeliverableWatchedAlert(alert: PendingWatchedAlert) {
+  if (!alert.watched || alert.hidden) return false;
+
+  if (alert.reason === "historical_low") return isStillHistoricalLow(alert);
+
+  return (
     alert.member &&
     alert.monitorActive &&
     alert.currentThresholdPercent !== null &&
@@ -389,14 +449,42 @@ function formatNumber(value: number) {
 }
 
 function formatReason(alert: PendingWatchedAlert) {
-  return alert.reason === "crossing"
+  if (alert.reason === "historical_low") {
+    return `• Historical low: ${formatNumber(alert.dropPercent)}% below the previous price, at or below its lowest earlier price`;
+  }
+
+  const reason = alert.reason === "crossing"
     ? `crossed the ${formatNumber(alert.thresholdPercent)}% threshold`
     : `new best in the qualifying episode (threshold ${formatNumber(alert.thresholdPercent)}%)`;
+
+  return `• ${escapeSlackText(alert.displayName ?? alert.monitorId)}: ${reason}`;
 }
 
-// One message per product and observation, listing every triggering monitor
-// (D10). The price is the alerted observation's, with the display-price pair
-// preference (normalized, then source).
+// The discount shown for the observation: a threshold alert's stored
+// discount, otherwise the observation's discount when it is reliable (D8).
+function observationDiscount(alerts: PendingWatchedAlert[]) {
+  const stored = alerts.find((alert) => alert.discountPercent !== null)?.discountPercent;
+
+  if (stored !== undefined && stored !== null) return stored;
+
+  const [first] = alerts;
+
+  return first &&
+    first.observedDiscountPercent !== null &&
+    isReliableDiscount({
+      source: first.source,
+      currentPrice: first.observedPrice,
+      currency: first.observedCurrency,
+      discountPercent: first.observedDiscountPercent,
+    })
+    ? first.observedDiscountPercent
+    : null;
+}
+
+// One message per product and observation, listing every reason: the
+// historical low first, then every triggering monitor (D10). The price is the
+// alerted observation's, with the display-price pair preference (normalized,
+// then source).
 export function formatWatchedAlertMessage(alerts: PendingWatchedAlert[], preferenceWeightPercent: number) {
   const [first] = alerts;
 
@@ -407,23 +495,27 @@ export function formatWatchedAlertMessage(alerts: PendingWatchedAlert[], prefere
     : first.observedSourcePrice !== null && first.observedSourceCurrency !== null
       ? `${escapeSlackText(first.observedSourcePrice)} ${escapeSlackText(first.observedSourceCurrency)}`
       : null;
+  const discount = observationDiscount(alerts);
   const details = [
     price,
-    `${formatNumber(first.discountPercent)}% discount`,
+    discount !== null ? `${formatNumber(discount)}% discount` : null,
     first.preferenceScore !== null && first.dealScore !== null
       ? `Overall ${getOverallScore(first.preferenceScore, first.dealScore, preferenceWeightPercent).toFixed(1)}`
       : null,
     `<${escapeSlackText(first.externalUrl)}|View product>`,
   ].filter((value): value is string => value !== null);
-  const monitors = [...alerts]
-    .sort((left, right) => left.monitorId.localeCompare(right.monitorId))
-    .map((alert) => `• ${escapeSlackText(alert.displayName ?? alert.monitorId)}: ${formatReason(alert)}`);
+  const reasons = [
+    ...alerts.filter((alert) => alert.reason === "historical_low"),
+    ...alerts
+      .filter((alert) => alert.reason !== "historical_low")
+      .sort((left, right) => (left.monitorId ?? "").localeCompare(right.monitorId ?? "")),
+  ].map(formatReason);
 
   return [
     "*DealRadar Watched alert*",
     escapeSlackText(first.title),
     details.join(" · "),
-    ...monitors,
+    ...reasons,
   ].join("\n");
 }
 
@@ -432,32 +524,21 @@ function numberOrNull(value: unknown) {
 }
 
 function parsePendingAlert(row: Record<string, unknown>): PendingWatchedAlert | null {
-  const discountPercent = numericOrNull(textOrNull(row.discountPercent));
-  const thresholdPercent = numericOrNull(textOrNull(row.thresholdPercent));
-
   if (
     typeof row.alertId !== "string" ||
     typeof row.productId !== "string" ||
-    typeof row.monitorId !== "string" ||
     typeof row.snapshotId !== "string" ||
     typeof row.clientMessageId !== "string" ||
     !row.clientMessageId ||
     typeof row.title !== "string" ||
     typeof row.externalUrl !== "string" ||
-    typeof row.source !== "string" ||
-    (row.reason !== "crossing" && row.reason !== "new_best") ||
-    discountPercent === null ||
-    thresholdPercent === null
+    typeof row.source !== "string"
   ) return null;
 
-  return {
+  const state: PendingWatchedAlertState = {
     alertId: row.alertId,
     productId: row.productId,
-    monitorId: row.monitorId,
     snapshotId: row.snapshotId,
-    discountPercent,
-    thresholdPercent,
-    reason: row.reason,
     clientMessageId: row.clientMessageId,
     title: row.title,
     externalUrl: row.externalUrl,
@@ -470,14 +551,37 @@ function parsePendingAlert(row: Record<string, unknown>): PendingWatchedAlert | 
     currentThresholdPercent: numericOrNull(textOrNull(row.currentThresholdPercent)),
     productCurrentPrice: textOrNull(row.productCurrentPrice),
     productCurrency: textOrNull(row.productCurrency),
+    productSourceCurrentPrice: textOrNull(row.productSourceCurrentPrice),
+    productSourceCurrency: textOrNull(row.productSourceCurrency),
     productDiscountPercent: numericOrNull(textOrNull(row.productDiscountPercent)),
     observedPrice: textOrNull(row.observedPrice),
     observedCurrency: textOrNull(row.observedCurrency),
     observedSourcePrice: textOrNull(row.observedSourcePrice),
     observedSourceCurrency: textOrNull(row.observedSourceCurrency),
+    observedDiscountPercent: numericOrNull(textOrNull(row.observedDiscountPercent)),
     preferenceScore: numberOrNull(row.preferenceScore),
     dealScore: numberOrNull(row.dealScore),
   };
+
+  if (row.reason === "historical_low") {
+    const dropPercent = numericOrNull(textOrNull(row.dropPercent));
+
+    return dropPercent === null
+      ? null
+      : { ...state, reason: row.reason, monitorId: null, discountPercent: null, thresholdPercent: null, dropPercent };
+  }
+
+  const discountPercent = numericOrNull(textOrNull(row.discountPercent));
+  const thresholdPercent = numericOrNull(textOrNull(row.thresholdPercent));
+
+  if (
+    (row.reason !== "crossing" && row.reason !== "new_best") ||
+    typeof row.monitorId !== "string" ||
+    discountPercent === null ||
+    thresholdPercent === null
+  ) return null;
+
+  return { ...state, reason: row.reason, monitorId: row.monitorId, discountPercent, thresholdPercent, dropPercent: null };
 }
 
 export type WatchedAlertDeliveryResult = {
@@ -487,7 +591,8 @@ export type WatchedAlertDeliveryResult = {
 
 // Delivers every pending, unclaimed Watched alert (D13, "Delivery and
 // retry"). Alerts that no longer hold are expired (P5(b)). The rest are
-// grouped per product and observation; each group is claimed with a lease
+// grouped per product and observation, so a historical low and the threshold
+// alerts of the same observation go out as one message; each group is claimed with a lease
 // and token, sent once with its client_message_id, and marked sent with the
 // token. A failed send releases the claim and the other groups are still
 // attempted; it throws at the end if any group failed, so the caller can
@@ -507,6 +612,7 @@ export async function deliverPendingWatchedAlerts({
       alert.snapshot_id::TEXT AS "snapshotId",
       alert.discount_percent::TEXT AS "discountPercent",
       alert.threshold_percent::TEXT AS "thresholdPercent",
+      alert.drop_percent::TEXT AS "dropPercent",
       alert.reason,
       alert.client_message_id AS "clientMessageId",
       product.title,
@@ -514,7 +620,7 @@ export async function deliverPendingWatchedAlerts({
       product.source,
       product.watched,
       product.hidden,
-      (product.monitor_ids @> ARRAY[alert.monitor_id]) AS "member",
+      COALESCE(product.monitor_ids @> ARRAY[alert.monitor_id], FALSE) AS "member",
       COALESCE(
         monitor.enabled AND monitor.removed_at IS NULL AND monitor.strategy = 'discount_threshold',
         FALSE
@@ -523,16 +629,19 @@ export async function deliverPendingWatchedAlerts({
       monitor.minimum_discount_percent::TEXT AS "currentThresholdPercent",
       product.current_price::TEXT AS "productCurrentPrice",
       product.currency AS "productCurrency",
+      product.source_current_price::TEXT AS "productSourceCurrentPrice",
+      product.source_currency AS "productSourceCurrency",
       product.discount_percent::TEXT AS "productDiscountPercent",
       observation.current_price::TEXT AS "observedPrice",
       observation.currency AS "observedCurrency",
       observation.source_current_price::TEXT AS "observedSourcePrice",
       observation.source_currency AS "observedSourceCurrency",
+      observation.discount_percent::TEXT AS "observedDiscountPercent",
       evaluation.preference_score AS "preferenceScore",
       evaluation.deal_score AS "dealScore"
     FROM watched_alerts alert
     JOIN products product ON product.id = alert.product_id
-    JOIN monitor_definitions monitor ON monitor.monitor_id = alert.monitor_id
+    LEFT JOIN monitor_definitions monitor ON monitor.monitor_id = alert.monitor_id
     JOIN product_snapshots observation ON observation.id = alert.snapshot_id
     LEFT JOIN product_evaluations evaluation ON evaluation.product_id = alert.product_id
     WHERE alert.status = 'pending'

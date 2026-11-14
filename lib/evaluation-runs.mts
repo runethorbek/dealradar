@@ -22,7 +22,7 @@ export type EvaluationRunImportContext = {
   productsUpdated: number;
   snapshotsInserted: number;
   scanWarnings: unknown[];
-  watchedHistoricalLows?: Array<{ productId: string; dropPercent: number }>;
+  watchedHistoricalLows?: Array<{ productId: string; snapshotId: string; dropPercent: number }>;
   // Daily summary (#80): the Europe/Copenhagen date computed once at import
   // start, and the import's monitor definitions warning. Stored in
   // import_summary only when present.
