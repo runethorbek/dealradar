@@ -59,9 +59,11 @@ same-currency observation is strictly lower than the previous observation and
 at or below the lowest earlier same-currency observation. Remaining at the same
 low price is not a new event.
 
-Watch gives no recommendation priority in the per-import message, for Zalando
-or Vinted. Until #89, a watched historical-low event gave first Zalando
-recommendation priority there; since #89 it is a Watched alert reason instead.
+Watch gives no Recommendation priority: a Watched product is ranked like any
+other product in the Daily summary. Until #89, a watched historical-low event
+gave first Zalando recommendation priority in the per-import message; since
+#89 it is a Watched alert reason instead, and since #90 the per-import message
+has no recommendations.
 Watch does not change dashboard ranking, visibility, or evaluation input.
 Watched state itself stays independent of monitor configuration: watching does
 not add a product to a monitor, and there are no per-product target prices.
@@ -129,35 +131,32 @@ Overall score is a ranking mechanism, not an independent AI judgment.
 ## Recommendation
 
 A product surfaced because DealRadar considers it sufficiently relevant based
-on its current evaluation and ranking. Since #89, a Watched product that
-reached a watched historical-low event is no longer a Recommendation; it gets a
-Watched alert.
-
-Recommendations are per source: an import has at most one Vinted
-recommendation and at most one Zalando recommendation, and the sources are
-never compared with each other. Hidden products are never recommended.
-The full rules are in `docs/recommendation-policy.md`.
+on its current evaluation and ranking. Since #90, a Recommendation is a Best
+match in the Daily summary: at most one Best match per Active monitor per
+Daily summary. Each monitor is selected on its own, and monitors are never
+compared with each other. Hidden products are never recommended. The full
+rules are in `docs/recommendation-policy.md`.
 
 A recommendation does not imply an instruction to purchase.
 
-Since #60, both the Vinted and the Zalando recommendation follow the policy.
-See "Current production paths" in `docs/recommendation-policy.md`.
+A Watched alert is a separate notification, not a Recommendation. Since #89, a
+Watched product that reached a watched historical-low event gets a Watched
+alert, not a Recommendation.
 
-During the parallel run (since #80), a Recommendation has two forms: the
-per-source import recommendation above, and the per-monitor
-Best match in the Daily summary. Retiring the per-source form needs explicit
-approval (design D14, Phase 7).
+Until #90, Recommendations were per source: an import had at most one Vinted
+recommendation and at most one Zalando recommendation in the per-import
+message. That form was removed in #90; see "Removed: per-source
+recommendations" in `docs/recommendation-policy.md`. The per-import message is
+now operational only: import counts and Scan warnings.
 
 ## New recommendation
 
-A newly imported or materially changed product that has been evaluated during
-the current import, is visible, and has an Overall score of at least 7. It is
-the candidate pool for the Vinted recommendation and the Zalando fallback
-recommendation. Products evaluated in earlier imports are not new
-recommendations again.
-
-The Vinted recommendation (since #58) and the Zalando fallback recommendation
-(since #60) apply this definition.
+Retired in #90, with the per-source recommendations. It meant a newly imported
+or materially changed product that had been evaluated during the current
+import, was visible, and had an Overall score of at least 7: the candidate
+pool of the Vinted recommendation and the Zalando fallback recommendation.
+The Daily summary has no such pool: it uses stored evaluations, whatever their
+age, against each monitor's own threshold.
 
 ## Monitor
 
@@ -184,8 +183,7 @@ How a monitor's products qualify for a monitor recommendation:
 `discount_threshold` (with a minimum discount percent; Zalando only) or
 `best_match` (with a minimum Overall score). No strategy is inferred when a
 monitor has none. Since #80, a monitor's strategy decides its Qualifying
-products and Best match in the Daily summary; it does not change the
-per-source import recommendation.
+products and Best match in the Daily summary.
 
 ## Qualifying product
 
@@ -219,7 +217,8 @@ per Active monitor, its Qualifying product and not-yet-evaluated counts, each
 monitor's freshness, and the import's monitor definition and Scan warnings. It
 is produced from persisted state after the first import of the day, at most
 once per date, and never after its date. There is no Daily summary without an
-Active monitor. It is separate from the per-import message.
+Active monitor. Since #90 it is the only Recommendation. It is separate from
+the per-import message, which has only import counts and Scan warnings.
 
 ## Watched alert
 

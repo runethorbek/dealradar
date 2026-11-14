@@ -323,14 +323,12 @@ Gemini call succeeding.
 - **Expected value/state:** `status = 'completed'`, `notification_sent =
   true`, and one new Slack message (produced by `finalizeEvaluationRun` in
   `lib/evaluation-finalization.mts`, via `formatImportSlackMessage` in
-  `lib/import-notification.mts`). It references the evaluated product as the
-  Zalando recommendation (`selectZalandoFallbackRecommendation`) or as the
-  Vinted recommendation (`selectVintedRecommendation`) only when its unrounded
-  Overall score is at least 7. A product named in the run's
-  `watched_historical_lows` is not a Zalando recommendation since #89: it is a
-  `historical_low` row in `watched_alerts`, sent as a separate Watched alert
-  (see `docs/recommendation-policy.md`). A message without a recommendation is
-  correct when neither applies.
+  `lib/import-notification.mts`). Since #90 it is operational only: the
+  summary line with `1 evaluated` and, when present, the scan-warning block.
+  It never contains a recommendation entry or names the evaluated product. A
+  product named in the run's `watched_historical_lows` is a `historical_low`
+  row in `watched_alerts`, sent as a separate Watched alert (see
+  `docs/recommendation-policy.md`).
 - **Likely subsystem if it fails**, given Checkpoint 8 already confirmed the
   evaluation is persisted and `evaluation_runs.status = 'completed'`:
   - `notification_claimed_at` is `NULL` and `notification_sent = false`

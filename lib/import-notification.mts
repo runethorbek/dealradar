@@ -1,6 +1,3 @@
-import { getProductDisplayTitle } from "./vinted-display-title.mts";
-import { defaultRankingSettings, getOverallScore as computeOverallScore } from "./ranking-settings.mts";
-
 export type ImportRecommendation = {
   productId: string;
   externalUrl: string;
@@ -20,21 +17,8 @@ export type ImportRecommendation = {
   dealScore: number;
 };
 
-export type ImportSlackHighlight = Omit<
-  ImportRecommendation,
-  "preferenceScore" | "dealScore"
-> & {
-  preferenceScore: number | null;
-  dealScore: number | null;
-};
-
 export const vintedSource = "vinted.com";
 export const zalandoSource = "zalando.dk";
-
-export type SourceRecommendations = {
-  zalando: ImportSlackHighlight | null;
-  vinted: ImportSlackHighlight | null;
-};
 
 export type ImportSummary = {
   ref: string;
@@ -59,18 +43,9 @@ export type PartialScanWarning = {
   failures: PartialScanFailure[];
 };
 
-const minimumRecommendationOverallScore = 7;
 const maximumRenderedFailures = 5;
 const maximumFailureNameLength = 120;
 const maximumFailureErrorLength = 240;
-
-export function getOverallEvaluationScore(
-  preferenceScore: number,
-  dealScore: number,
-  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
-) {
-  return computeOverallScore(preferenceScore, dealScore, preferenceWeightPercent);
-}
 
 export function escapeSlackText(value: string) {
   return value
@@ -187,47 +162,6 @@ export function parsePartialScanWarning(
   };
 }
 
-function getRecommendationDisplayTitle(recommendation: ImportSlackHighlight) {
-  return getProductDisplayTitle({
-    source: recommendation.source ?? "",
-    title: recommendation.title,
-    brand: recommendation.brand ?? null,
-    listingText: recommendation.listingText ?? null,
-    articleCondition: recommendation.articleCondition ?? null,
-    sizeGuess: recommendation.sizeGuess ?? null,
-    evaluation: { translatedListingTextDa: recommendation.translatedListingTextDa ?? null },
-  });
-}
-
-function getDisplayPrice(recommendation: ImportSlackHighlight) {
-  if (recommendation.currentPrice !== null && recommendation.currency !== null) {
-    return {
-      price: recommendation.currentPrice,
-      currency: recommendation.currency,
-    };
-  }
-
-  if (
-    recommendation.sourceCurrentPrice !== null &&
-    recommendation.sourceCurrency !== null
-  ) {
-    return {
-      price: recommendation.sourceCurrentPrice,
-      currency: recommendation.sourceCurrency,
-    };
-  }
-
-  return null;
-}
-
-function hasNormalizedPrice(item: ImportRecommendation) {
-  return item.currentPrice !== null && item.currency !== null;
-}
-
-function hasSourcePrice(item: ImportRecommendation) {
-  return item.sourceCurrentPrice !== null && item.sourceCurrency !== null;
-}
-
 // Product ids are Postgres BIGINTs serialized as text, so ascending id order is
 // numeric rather than lexicographic: a shorter unsigned integer is smaller.
 export function compareProductIds(left: string, right: string) {
@@ -238,76 +172,11 @@ export function compareProductIds(left: string, right: string) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-// Overall-based recommendation for one source (docs/recommendation-policy.md):
-// the visible product evaluated in this import with the highest unrounded
-// Overall score, provided it is at least 7. Ties: higher Deal score, then
-// ascending product id.
-function selectOverallRecommendation(
-  source: string,
-  recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number,
-) {
-  const overallScore = (item: ImportRecommendation) =>
-    getOverallEvaluationScore(item.preferenceScore, item.dealScore, preferenceWeightPercent);
-  const candidates = recommendations.filter(
-    (item) =>
-      item.source === source &&
-      !item.hidden &&
-      overallScore(item) >= minimumRecommendationOverallScore,
-  );
-  const normalizedPriceCandidates = candidates.filter(hasNormalizedPrice);
-  const pricedCandidates = normalizedPriceCandidates.length > 0
-    ? normalizedPriceCandidates
-    : candidates.filter(hasSourcePrice);
-
-  return [...pricedCandidates].sort(
-    (left, right) =>
-      overallScore(right) - overallScore(left) ||
-      right.dealScore - left.dealScore ||
-      compareProductIds(left.productId, right.productId),
-  )[0] ?? null;
-}
-
-// Vinted recommendation: Overall-based, with no watched or price-history rules.
-export function selectVintedRecommendation(
-  recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
-) {
-  return selectOverallRecommendation(vintedSource, recommendations, preferenceWeightPercent);
-}
-
-// Zalando fallback (Zalando recommendation step 2): applies only when no
-// watched historical-low event is recommended (step 1).
-export function selectZalandoFallbackRecommendation(
-  recommendations: ImportRecommendation[],
-  preferenceWeightPercent: number = defaultRankingSettings.preferenceWeightPercent,
-) {
-  return selectOverallRecommendation(zalandoSource, recommendations, preferenceWeightPercent);
-}
-
-function formatRecommendation(label: string, recommendation: ImportSlackHighlight) {
-  const displayPrice = getDisplayPrice(recommendation);
-  const scores =
-    recommendation.preferenceScore !== null && recommendation.dealScore !== null
-      ? `Preference ${recommendation.preferenceScore}/10 · ` +
-        `Deal ${recommendation.dealScore}/10 · `
-      : "";
-  const price = displayPrice
-    ? `${displayPrice.price} ${escapeSlackText(displayPrice.currency)} · `
-    : "";
-
-  return (
-    `\n\n${label} recommendation:\n` +
-    `${escapeSlackText(getRecommendationDisplayTitle(recommendation))}\n` +
-    scores +
-    price +
-    `<${escapeSlackText(recommendation.externalUrl)}|View product>`
-  );
-}
-
+// The per-import message is operational only (#90, design P7(b)): the
+// summary line and, when there are warnings, the scan-warning block. The
+// Daily summary is the only Recommendation.
 export function formatImportSlackMessage(
   summary: ImportSummary,
-  recommendations: SourceRecommendations,
   partialScanWarnings: PartialScanWarning[] = [],
 ) {
   const summaryMessage =
@@ -316,18 +185,8 @@ export function formatImportSlackMessage(
     ` · ${summary.productsUpdated} updated` +
     ` · ${summary.snapshotsInserted} snapshots` +
     ` · ${summary.productsEvaluated} evaluated`;
-  let message = summaryMessage;
 
-  // One recommendation per source; the sources are never compared.
-  if (recommendations.zalando) {
-    message += formatRecommendation("Zalando", recommendations.zalando);
-  }
-
-  if (recommendations.vinted) {
-    message += formatRecommendation("Vinted", recommendations.vinted);
-  }
-
-  return message + formatScanWarnings(partialScanWarnings);
+  return summaryMessage + formatScanWarnings(partialScanWarnings);
 }
 
 // The "Scan warnings" block shared by the per-import message and the daily

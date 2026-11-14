@@ -5,7 +5,7 @@ import type { EvaluationRun, EvaluationRunSql } from "../lib/evaluation-runs.mts
 
 const completedRun: EvaluationRun = { id: "7", importRef: "abc", status: "completed", startedAt: "now", completedAt: "now", notificationSent: false, createdAt: "now", candidatesSelected: 2, evaluationsCompleted: 1, evaluationsFailed: 1, pendingCandidates: 0, batchesProcessed: 1 };
 
-test("finalizes completed persisted work once and uses successful persisted evaluations", async () => {
+test("finalizes completed persisted work once with the operational per-import message", async () => {
   let claimed = false;
   let sent = false;
   const sql: EvaluationRunSql = async (strings) => {
@@ -14,8 +14,6 @@ test("finalizes completed persisted work once and uses successful persisted eval
     if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }]; }
     if (query.includes("SET notification_sent")) { sent = true; return [{ id: "7" }]; }
     if (query.includes("import_summary")) return [{ importSummary: { ref: "abc", productsProcessed: 3, productsInserted: 2, productsUpdated: 1, snapshotsInserted: 3 }, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
-    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   const messages: string[] = [];
@@ -23,76 +21,11 @@ test("finalizes completed persisted work once and uses successful persisted eval
   assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: true, notificationSent: true });
   assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: false, notificationSent: true });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /3 processed.*2 new.*1 updated.*3 snapshots.*1 evaluated/);
-  assert.match(messages[0], /Zalando recommendation:\nA/);
+  // productsEvaluated is the run's completed evaluations, not the stored count.
+  assert.equal(messages[0], "DealRadar updated: 3 processed · 2 new · 1 updated · 3 snapshots · 1 evaluated");
 });
 
-test("uses the persisted ranking weight to select the Slack top recommendation", async () => {
-  let claimed = false;
-  const sql: EvaluationRunSql = async (strings) => {
-    const query = strings.join("$parameter");
-    if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
-    if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000008", notificationClaimToken: "claim-8" }]; }
-    if (query.includes("SET notification_sent")) return [{ id: "7" }];
-    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [
-      { productId: "preference-heavy", externalUrl: "https://example.com/a", title: "Preference heavy", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 3 },
-      { productId: "deal-heavy", externalUrl: "https://example.com/b", title: "Deal heavy", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 3, dealScore: 9 },
-    ];
-    if (query.includes("FROM application_settings")) return [{ ranking: { preferenceWeightPercent: 20 } }];
-    throw new Error(query);
-  };
-  const messages: string[] = [];
-  await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
-  assert.match(messages[0], /Zalando recommendation:\nDeal heavy/);
-});
-
-test("selects one recommendation per source from the run's completed evaluations", async () => {
-  const product = (productId: string, source: string, preferenceScore: number, dealScore: number, hidden = false) => ({
-    productId, externalUrl: `https://example.com/${productId}`, title: `Product ${productId}`, source, currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden, preferenceScore, dealScore,
-  });
-  const run = async (rows: ReturnType<typeof product>[]) => {
-    const messages: string[] = [];
-    const sql: EvaluationRunSql = async (strings) => {
-      const query = strings.join("$parameter");
-      if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
-      if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000010", notificationClaimToken: "claim-10" }];
-      if (query.includes("SET notification_sent")) return [{ id: "7" }];
-      if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-      if (query.includes("JOIN product_evaluations")) return rows;
-      if (query.includes("FROM application_settings")) return [{ ranking: null }];
-      throw new Error(query);
-    };
-    await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
-    return messages[0];
-  };
-
-  const both = await run([
-    product("20", "vinted.com", 10, 10, true),
-    product("21", "vinted.com", 8, 7),
-    product("22", "vinted.com", 9, 9),
-    product("30", "zalando.dk", 7, 7),
-  ]);
-  assert.match(both, /\n\nZalando recommendation:\nProduct 30\n[^\n]+\n\nVinted recommendation:\nProduct 22\n/);
-
-  // A Vinted listing below Overall 7 (8/5 -> 6.8) gives no Vinted recommendation,
-  // and a strong Vinted listing never displaces the Zalando one.
-  const vintedBelowThreshold = await run([product("21", "vinted.com", 8, 5), product("30", "zalando.dk", 7, 7)]);
-  assert.doesNotMatch(vintedBelowThreshold, /Vinted recommendation/);
-  assert.match(vintedBelowThreshold, /Zalando recommendation:\nProduct 30/);
-
-  const vintedOnly = await run([product("22", "vinted.com", 9, 9)]);
-  assert.doesNotMatch(vintedOnly, /Zalando recommendation/);
-  assert.match(vintedOnly, /Vinted recommendation:\nProduct 22/);
-
-  // The Zalando fallback (#60) has the same Overall 7 threshold: 8/5 -> 6.8
-  // gives no Zalando recommendation, while 7/7 -> 7.0 above qualifies.
-  const zalandoBelowThreshold = await run([product("30", "zalando.dk", 8, 5), product("22", "vinted.com", 9, 9)]);
-  assert.doesNotMatch(zalandoBelowThreshold, /Zalando recommendation/);
-  assert.match(zalandoBelowThreshold, /Vinted recommendation:\nProduct 22/);
-});
-
-test("the Zalando recommendation at finalization is the fallback only and does not read watched historical-low events (#89)", async () => {
+test("the per-import message has only counts and scan warnings, and finalization reads no evaluations or ranking settings (#90)", async () => {
   const messages: string[] = [];
   const queries: string[] = [];
   const sql: EvaluationRunSql = async (strings) => {
@@ -101,50 +34,59 @@ test("the Zalando recommendation at finalization is the fallback only and does n
     if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
     if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000011", notificationClaimToken: "claim-11" }];
     if (query.includes("SET notification_sent")) return [{ id: "7" }];
-    // The run still records the import's events as a diagnostic record.
-    if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [], watchedHistoricalLows: [{ productId: "5", snapshotId: "51", dropPercent: 12.5 }] }];
-    if (query.includes("JOIN product_evaluations")) return [
-      { productId: "30", externalUrl: "https://example.com/30", title: "Evaluated Zalando", source: "zalando.dk", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 10, dealScore: 10 },
-      { productId: "22", externalUrl: "https://example.com/22", title: "Evaluated Vinted", source: "vinted.com", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 9 },
-    ];
-    if (query.includes("FROM application_settings")) return [{ ranking: null }];
+    // The run still records the import's watched historical lows as a
+    // diagnostic record; finalization does not read them.
+    if (query.includes("import_summary")) return [{
+      importSummary: { productsProcessed: 4, productsInserted: 1, productsUpdated: 3, snapshotsInserted: 2 },
+      scanWarnings: [{ sourceName: "Zalando", successfulPages: 5, attemptedPages: 6, failedPages: 1, failures: [{ name: "Page 6", url: null, error: "timeout" }] }],
+      watchedHistoricalLows: [{ productId: "5", snapshotId: "51", dropPercent: 12.5 }],
+    }];
     throw new Error(query);
   };
   await finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async (message: string) => { messages.push(message); return { success: true }; } });
 
-  assert.match(messages[0]!, /Zalando recommendation:\nEvaluated Zalando\n[^\n]*\n\nVinted recommendation:\nEvaluated Vinted/);
-  assert.ok(queries.every((query) => !query.includes("watched_historical_lows")), "watched_historical_lows is not read for recommendations");
-  assert.ok(queries.every((query) => !query.includes("LEFT JOIN product_evaluations")), "no historical-low candidate query");
+  assert.equal(
+    messages[0],
+    "DealRadar updated: 4 processed · 1 new · 3 updated · 2 snapshots · 1 evaluated\n\n" +
+      "Scan warnings:\n• Zalando: 5/6 pages succeeded; 1 failed\n  ◦ Page 6: timeout",
+  );
+  assert.doesNotMatch(messages[0]!, /recommendation/i);
+  assert.ok(queries.every((query) => !query.includes("product_evaluations")), "no product_evaluations query");
+  assert.ok(queries.every((query) => !query.includes("application_settings")), "no application_settings query");
+  assert.ok(queries.every((query) => !query.includes("watched_historical_lows")), "watched_historical_lows is not read");
+  // The only candidate access is the run's own terminality and count reload.
+  assert.ok(
+    queries.filter((query) => query.includes("evaluation_run_candidates")).every((query) => query.includes("COUNT(erc.product_id)")),
+    "no query loads the run's completed candidate rows",
+  );
 });
 
-test("a ranking-settings read failure after the claim is acquired releases the claim through the normal error path", async () => {
+test("a failure to record the sent notification releases the claim through the normal error path", async () => {
   let claimed = false;
   let notificationSent = false;
   let deliveries = 0;
-  let applicationSettingsCalls = 0;
+  let markCalls = 0;
   const sql: EvaluationRunSql = async (strings) => {
     const query = strings.join("$parameter");
     if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun, notificationSent }];
     if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000009", notificationClaimToken: "claim-9" }]; }
-    if (query.includes("SET notification_sent")) { notificationSent = true; return [{ id: "7" }]; }
+    if (query.includes("SET notification_sent")) {
+      markCalls += 1;
+      if (markCalls === 1) return [];
+      notificationSent = true;
+      return [{ id: "7" }];
+    }
     if (query.includes("SET notification_claimed_at = NULL")) { claimed = false; return []; }
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [{ productId: "1", externalUrl: "https://example.com/a", title: "A", currentPrice: "100", currency: "DKK", sourceCurrentPrice: null, sourceCurrency: null, hidden: false, preferenceScore: 9, dealScore: 8 }];
-    if (query.includes("FROM application_settings")) {
-      applicationSettingsCalls += 1;
-      if (applicationSettingsCalls === 1) throw new Error("connection reset");
-      return [{ ranking: null }];
-    }
     throw new Error(query);
   };
   const dependencies = { sql, run: completedRun, postSlackMessage: async () => { deliveries += 1; return { success: true }; } };
 
   await assert.rejects(finalizeEvaluationRun(dependencies), /can be retried/);
-  assert.equal(deliveries, 0, "Slack must not be contacted when the ranking-settings read fails first");
-  assert.equal(claimed, false, "the notification claim must be released on the failed read");
+  assert.equal(claimed, false, "the notification claim must be released when it cannot be recorded");
 
   assert.deepEqual(await finalizeEvaluationRun(dependencies), { finalized: true, notificationSent: true });
-  assert.equal(deliveries, 1);
+  assert.equal(deliveries, 2);
 });
 
 test("does not finalize before all candidates are terminal", async () => {
@@ -162,9 +104,7 @@ test("reloads terminality from Postgres instead of trusting a stale workflow sna
     if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }];
     if (query.includes("SET notification_sent")) return [{ id: "7" }];
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) return [];
-    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   await finalizeEvaluationRun({ sql, run: { ...completedRun, status: "running", pendingCandidates: 1 }, postSlackMessage: async () => { deliveries += 1; return { success: true }; } });
@@ -179,9 +119,7 @@ test("a Slack failure remains terminal and cannot trigger another delivery or Ge
     if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
     if (query.includes("SET notification_claimed_at = NOW")) { if (claimed) return []; claimed = true; return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }]; }
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) { claimed = false; return []; }
-    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   const dependencies = { sql, run: completedRun, postSlackMessage: async () => { deliveries += 1; return { success: false, error: "unavailable" }; } };
@@ -196,9 +134,7 @@ test("a thrown Slack error is non-fatal after the one persisted claim", async ()
     if (query.includes("FROM evaluation_runs") && query.includes("COUNT(erc.product_id)")) return [{ ...completedRun }];
     if (query.includes("SET notification_claimed_at = NOW")) return [{ notificationClientMessageId: "00000000-0000-4000-8000-000000000007", notificationClaimToken: "claim-7" }];
     if (query.includes("import_summary")) return [{ importSummary: {}, scanWarnings: [] }];
-    if (query.includes("JOIN product_evaluations")) return [];
     if (query.includes("SET notification_claimed_at = NULL")) return [];
-    if (query.includes("FROM application_settings")) return [{ ranking: null }];
     throw new Error(query);
   };
   await assert.rejects(finalizeEvaluationRun({ sql, run: completedRun, postSlackMessage: async () => { throw new Error("network"); } }), /can be retried/);

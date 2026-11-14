@@ -134,10 +134,10 @@ export function qualifies(policy: MonitorPolicy, candidate: MonitorCandidate, pr
   }
 }
 
-// Both strategies use today's order (P8(a)), matching
-// selectOverallRecommendation in lib/import-notification.mts: higher
-// Overall, then higher Deal score, then ascending product id. An unevaluated
-// product sorts after every evaluated one.
+// Both strategies use today's order (P8(a)), the order of the retired
+// per-source recommendations (#90): higher Overall, then higher Deal score,
+// then ascending product id. An unevaluated product sorts after every
+// evaluated one.
 export function compareQualified(
   policy: MonitorPolicy,
   left: MonitorCandidate,

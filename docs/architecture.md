@@ -185,12 +185,15 @@ Vercel Workflow adapter invokes bounded application batches, while persisted
 pending, processing, completed, and failed candidate state determines recovery.
 Normal imports persist a selected run and enqueue that adapter before returning;
 they do not wait for Gemini. Once every selected candidate is terminal, the
-application finalizer reads the persisted run and evaluations, selects the
-per-source recommendations from the run's completed evaluations, and makes one claimed final Slack delivery attempt. Watched historical-low events that the
-import detected from its inserted snapshots are Watched alerts since #89; the
-copy recorded with the run is a diagnostic record and is not read there. Imports
-with no selected candidates send the normal no-evaluation summary directly and
-do not create an empty durable run.
+application finalizer reads the persisted run's counts, import summary, and
+scan warnings, and makes one claimed final Slack delivery attempt of the
+operational per-import message (counts and scan warnings only, since #90). It
+selects no recommendation; the Daily summary, sent by the next Workflow step,
+is the only Recommendation. Watched historical-low events that the import
+detected from its inserted snapshots are Watched alerts since #89; the copy
+recorded with the run is a diagnostic record and is not read there. Imports
+with no selected candidates send the same operational message directly and do
+not create an empty durable run.
 
 Gemini preferences are soft user guidance supplied to Gemini. Application
 settings are separate deterministic behavior. For Vinted, configured minimum
@@ -249,8 +252,8 @@ This keeps:
 
 centralized in DealRadar.
 
-Recommendation selection rules, per source, are defined in
-`docs/recommendation-policy.md`.
+Recommendation selection rules (the Daily summary's Best match per Active
+monitor) and Watched alerts are defined in `docs/recommendation-policy.md`.
 
 A Slack delivery failure should not cause an otherwise successful import to fail.
 
