@@ -247,7 +247,7 @@ test("P4(c): a historical low and a crossing of the same observation are stored 
 
   assert.equal(result.status, 200);
   assert.deepEqual(result.warnings, []);
-  assert.equal(alertInserts, 1);
+  assert.equal(alertInserts, 2, "threshold and historical-low rows are inserted independently");
   assert.deepEqual(
     storedAlerts.map((alert) => [alert.reason, alert.monitorId, alert.snapshotId, alert.dropPercent]),
     [["crossing", "zalando-shoes", "51", null], ["historical_low", null, "51", "25"]],
@@ -269,7 +269,7 @@ test("P4(c): a historical low and a crossing of the same observation are stored 
   snapshotInserted = false;
   const retry = await runImport();
   assert.equal(retry.status, 200);
-  assert.equal(alertInserts, 1);
+  assert.equal(alertInserts, 2);
   assert.equal(storedAlerts.length, 2);
   assert.equal(slackDeliveries.length, 1);
   assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /);

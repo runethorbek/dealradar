@@ -232,11 +232,52 @@ test("P4(c): threshold alerts are detected when a historical-low event exists, a
   ]);
 
   const inserts = queries.filter(({ query }) => query.includes("INSERT INTO watched_alerts"));
-  assert.equal(inserts.length, 1, "one INSERT per import");
-  assert.deepEqual(JSON.parse(inserts[0]!.values[0] as string), [
-    { product_id: "5", monitor_id: "zalando-shoes", snapshot_id: "51", discount_percent: 25, threshold_percent: 20, drop_percent: null, reason: "crossing" },
-    { product_id: "5", monitor_id: null, snapshot_id: "51", discount_percent: null, threshold_percent: null, drop_percent: 16.6667, reason: "historical_low" },
-  ]);
+  assert.deepEqual(inserts.map(({ values }) => JSON.parse(values[0] as string)), [
+    [{ product_id: "5", monitor_id: "zalando-shoes", snapshot_id: "51", discount_percent: 25, threshold_percent: 20, drop_percent: null, reason: "crossing" }],
+    [{ product_id: "5", monitor_id: null, snapshot_id: "51", discount_percent: null, threshold_percent: null, drop_percent: 16.6667, reason: "historical_low" }],
+  ], "threshold and historical-low rows are inserted independently");
+});
+
+test("threshold and historical-low alerts are recorded independently: a failure in one is logged and does not lose the other", async (t) => {
+  const event = { productId: "5", snapshotId: "51", dropPercent: 16.6667 };
+  const record = async (fails: (query: string, values: unknown[]) => boolean) => {
+    const queries: string[] = [];
+    const warnings: unknown[] = [];
+    const sql: WatchedAlertSql = async (strings, ...values) => {
+      const query = strings.join("$parameter");
+      if (fails(query, values)) throw new Error("connection reset");
+      queries.push(query);
+      return query.includes("FROM product_snapshots s") ? historyRows : [];
+    };
+    const warn = console.warn;
+    console.warn = (message: unknown) => { warnings.push(message); };
+    try {
+      return { recorded: await recordWatchedAlerts(sql, ["51"], [event]), queries, warnings };
+    } finally {
+      console.warn = warn;
+    }
+  };
+  const insertOf = (reason: string) => (query: string, values: unknown[]) =>
+    query.includes("INSERT INTO watched_alerts") && String(values[0]).includes(`"reason":"${reason}"`);
+
+  await t.test("threshold detection query fails: the historical low is still stored", async () => {
+    const { recorded, queries, warnings } = await record((query) => query.includes("FROM product_snapshots s"));
+    assert.deepEqual(recorded, [{ ...event, reason: "historical_low" }]);
+    assert.equal(queries.filter((query) => query.includes("INSERT INTO watched_alerts")).length, 1);
+    assert.deepEqual(warnings, ["DealRadar Watched alert detection failed."]);
+  });
+
+  await t.test("threshold insert fails: the historical low is still stored", async () => {
+    const { recorded, warnings } = await record(insertOf("crossing"));
+    assert.deepEqual(recorded, [{ ...event, reason: "historical_low" }]);
+    assert.deepEqual(warnings, ["DealRadar Watched alert detection failed."]);
+  });
+
+  await t.test("historical-low insert fails: the threshold alert is still stored", async () => {
+    const { recorded, warnings } = await record(insertOf("historical_low"));
+    assert.deepEqual(recorded.map((candidate) => candidate.reason), ["crossing"]);
+    assert.deepEqual(warnings, ["DealRadar watched historical-low alert recording failed."]);
+  });
 });
 
 test("a historical-low event is stored without a monitor, a threshold transition, or a reliable discount", async () => {

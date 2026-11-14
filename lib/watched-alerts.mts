@@ -271,26 +271,14 @@ export async function findWatchedAlerts(
   return detectWatchedAlerts([...products.values()], new Set(insertedSnapshotIds));
 }
 
-// Detects and stores this import's Watched alerts: the threshold transitions,
-// and the watched historical-low events that findWatchedHistoricalLows
-// returned for this import as 'historical_low' rows, each on the product's
-// latest snapshot, inserted by this import (P4(c)). Threshold rows are unique
-// per (product, monitor, snapshot) and historical-low rows per (product,
-// snapshot); the one INSERT uses ON CONFLICT DO NOTHING for both keys, so
-// detection is idempotent. client_message_id is derived from the product and
-// snapshot, so every row of one message shares it.
-export async function recordWatchedAlerts(
+// Threshold rows are unique per (product, monitor, snapshot) and
+// historical-low rows per (product, snapshot); ON CONFLICT DO NOTHING covers
+// both keys, so recording is idempotent. client_message_id is derived from
+// the product and snapshot, so every row of one message shares it.
+async function insertWatchedAlerts(
   sql: WatchedAlertSql,
-  insertedSnapshotIds: string[],
-  watchedHistoricalLows: WatchedHistoricalLowEvent[] = [],
-): Promise<Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate>> {
-  const candidates: Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate> = [
-    ...await findWatchedAlerts(sql, insertedSnapshotIds),
-    ...watchedHistoricalLows.map((event) => ({ ...event, reason: "historical_low" as const })),
-  ];
-
-  if (candidates.length === 0) return [];
-
+  candidates: Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate>,
+) {
   await sql`
     WITH detected AS (
       SELECT
@@ -343,8 +331,45 @@ export async function recordWatchedAlerts(
     FROM detected
     ON CONFLICT DO NOTHING
   `;
+}
 
-  return candidates;
+// Detects and stores this import's Watched alerts: the threshold transitions,
+// and the watched historical-low events that findWatchedHistoricalLows
+// returned for this import as 'historical_low' rows, each on the product's
+// latest snapshot, inserted by this import (P4(c)). The two are recorded
+// independently: a failed threshold detection or insert is logged and does
+// not prevent the historical-low rows from being stored, and the reverse.
+// Returns what was recorded.
+export async function recordWatchedAlerts(
+  sql: WatchedAlertSql,
+  insertedSnapshotIds: string[],
+  watchedHistoricalLows: WatchedHistoricalLowEvent[] = [],
+): Promise<Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate>> {
+  const recorded: Array<WatchedAlertCandidate | WatchedHistoricalLowAlertCandidate> = [];
+
+  try {
+    const thresholdAlerts = await findWatchedAlerts(sql, insertedSnapshotIds);
+
+    if (thresholdAlerts.length > 0) {
+      await insertWatchedAlerts(sql, thresholdAlerts);
+      recorded.push(...thresholdAlerts);
+    }
+  } catch {
+    console.warn("DealRadar Watched alert detection failed.");
+  }
+
+  const historicalLowAlerts = watchedHistoricalLows.map((event) => ({ ...event, reason: "historical_low" as const }));
+
+  if (historicalLowAlerts.length > 0) {
+    try {
+      await insertWatchedAlerts(sql, historicalLowAlerts);
+      recorded.push(...historicalLowAlerts);
+    } catch {
+      console.warn("DealRadar watched historical-low alert recording failed.");
+    }
+  }
+
+  return recorded;
 }
 
 // A pending alert row with the current state needed to re-check it (P5(b))

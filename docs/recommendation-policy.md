@@ -231,11 +231,12 @@ A Watched alert has one of three reasons: **crossing** and **new best**, per
 - **Detection.** One snapshot-history query per import, next to the watched
   historical-low detection, over Watched, visible products in Active
   `discount_threshold` monitors that received a new snapshot with a reliable
-  Discount. Rows go to `watched_alerts` (migrations 031 and 032) in one
-  insert with `ON CONFLICT DO NOTHING`: threshold rows are unique per
-  (product, monitor, snapshot), and `historical_low` rows, which have no
-  monitor, threshold, or Discount and store the drop percentage, are unique
-  per (product, snapshot). An import retry adds nothing.
+  Discount. Rows go to `watched_alerts` (migrations 031 and 032) with
+  `ON CONFLICT DO NOTHING`: threshold rows are unique per (product, monitor,
+  snapshot), and `historical_low` rows, which have no monitor, threshold, or
+  Discount and store the drop percentage, are unique per (product, snapshot).
+  An import retry adds nothing. Threshold and historical-low rows are recorded
+  independently, so a failure in one is logged and does not lose the other.
 - **Delivery.** `deliverPendingWatchedAlerts` (`lib/watched-alerts.mts`) runs
   right after detection in the import route and again after the Daily summary
   (the Workflow step after the evaluation-run finalizer, or the import route's
