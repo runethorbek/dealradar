@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, mock, test } from "node:test";
 
 // Route-level daily summary trigger (#80, design D13): the no-candidate path
-// sends the daily summary after the legacy message and never fails the
+// sends the daily summary after the per-import message and never fails the
 // import because of it; the evaluation path stores the summary date with the
 // run instead.
 
@@ -174,15 +174,15 @@ function reset() {
   summarySlackFails = false;
 }
 
-test("the no-candidate path sends the daily summary after the legacy message", async () => {
+test("the no-candidate path sends the daily summary after the per-import message", async () => {
   reset();
   const result = await runImport();
 
   assert.equal(result.status, 200);
   assert.equal(result.body.evaluationRunId, null);
   assert.equal(slackDeliveries.length, 2);
-  assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /, "the legacy message comes first");
-  assert.equal(slackDeliveries[0]!.clientMessageId, undefined, "the legacy message is unchanged");
+  assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /, "the per-import message comes first");
+  assert.equal(slackDeliveries[0]!.clientMessageId, undefined, "the per-import message has no client message id");
   assert.match(slackDeliveries[1]!.message, new RegExp(`^\\*DealRadar daily summary · ${getCopenhagenDate(new Date())}\\*\\n\\n\\*Zalando – Scarosso shoes\\*`));
   assert.equal(slackDeliveries[1]!.clientMessageId, "daily-client-id");
   assert.deepEqual(result.warnings, []);
@@ -219,7 +219,7 @@ test("a daily summary database failure is logged and does not fail the import", 
 
   assert.equal(result.status, 200);
   assert.equal(result.body.success, true);
-  assert.equal(slackDeliveries.length, 1, "only the legacy message");
+  assert.equal(slackDeliveries.length, 1, "only the per-import message");
   assert.ok(result.warnings.some((warning) => /daily notifications failed/.test(warning)));
 });
 

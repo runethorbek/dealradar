@@ -12,7 +12,7 @@ import { deliverPendingWatchedAlerts } from "./watched-alerts.mts";
 // Daily notifications delivered at the end of an import (#80; design D13,
 // "Delivery and retry"). Both triggers call deliverDailyNotifications: the
 // Workflow step after evaluation-run finalization, and the import route's
-// no-candidate path after the legacy message. No Vercel dependency (ADR 0001).
+// no-candidate path after the per-import message. No Vercel dependency (ADR 0001).
 
 type DailyNotificationsDependencies = DailySummaryWarnings & {
   sql: DailySummarySql;

@@ -168,8 +168,12 @@ Warnings are logged and returned in the import response under
 definitions applied, and `productMonitorIdsWithoutDefinition`: the number of
 distinct valid product `monitor_ids` in the import that have no
 `monitor_definitions` row (`null` if the lookup failed). They are not sent to
-Slack. Recommendation selection, Slack messages, and Gemini evaluation do not
-use monitor definitions yet.
+Slack.
+
+The stored definitions drive the Daily summary and Watched threshold alerts:
+each Active monitor's `recommendation` sets its strategy and threshold. The
+rules are in `docs/recommendation-policy.md`. Gemini evaluation and the
+per-import message do not use monitor definitions.
 
 ## Compatibility process
 

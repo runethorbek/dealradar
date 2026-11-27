@@ -227,7 +227,7 @@ test("a crossing is stored and delivered right after detection, once, and an imp
       `<${watchedUrl}|View product>\n• Zalando – shoes: crossed the 20% threshold`,
   );
   assert.equal(slackDeliveries[0]!.clientMessageId, "alert-client-id");
-  assert.match(slackDeliveries[1]!.message, /^DealRadar updated: /, "the legacy message follows");
+  assert.match(slackDeliveries[1]!.message, /^DealRadar updated: /, "the per-import message follows");
   assert.equal(slackDeliveries[1]!.clientMessageId, undefined);
   assert.deepEqual(storedAlerts.map((alert) => alert.status), ["sent"]);
 
@@ -320,6 +320,6 @@ test("a delivery failure is logged, never fails the import, and leaves the alert
   assert.deepEqual(later.warnings, []);
   assert.equal(slackDeliveries.length, 2);
   assert.match(slackDeliveries[0]!.message, /^DealRadar updated: /);
-  assert.match(slackDeliveries[1]!.message, /^\*DealRadar Watched alert\*\n/, "delivered after the legacy message");
+  assert.match(slackDeliveries[1]!.message, /^\*DealRadar Watched alert\*\n/, "delivered after the per-import message");
   assert.deepEqual(storedAlerts.map((alert) => alert.status), ["sent"]);
 });
