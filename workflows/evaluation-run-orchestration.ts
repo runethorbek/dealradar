@@ -39,7 +39,7 @@ export async function processEvaluationRunWithWorkflow(
   await finalizeEvaluationRunStep(input.databaseUrl, result.run);
   // A separate step after finalization (#80, design D13): the finalizer
   // returns early once its message is sent, so the daily summary keeps its own
-  // step retries without resending the legacy message.
+  // step retries without resending the per-import message.
   await deliverDailyNotificationsStep(input.databaseUrl, input.runId);
   return result;
 }

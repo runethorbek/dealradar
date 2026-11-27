@@ -3,6 +3,17 @@
 > Note: product feedback (Like / Not for me), `POST /api/product-feedback`, and
 > the `product-feedback-*.test.mts` tests were removed in #66. References to
 > them below are historical.
+>
+> Note: Slack recommendation selection has changed since this audit.
+> `selectTopRecommendation` and `selectSlackHighlight` (with
+> `slack-highlight.test.mts`) were removed in #60. The per-source
+> recommendations and `import-notification`'s `getOverallEvaluationScore`,
+> with its cross-check in `ranking-settings.test.mts`, were removed in #90.
+> The per-import Slack message now has only counts and scan warnings.
+> Recommendations come from the Daily summary, and Watched alerts are a
+> separate notification (`docs/recommendation-policy.md`). Their tests were
+> added after this audit and are not covered here. References to the removed
+> code below are historical.
 
 Investigation-only audit produced for issue #48. No production code, tests,
 migrations, workflows, configuration, or generated output were changed while

@@ -5,7 +5,7 @@ DealRadar is a personal deal-tracking application for products from Vinted and Z
 The system is split into two GitHub repositories:
 
 * `runethorbek/deals` — scraping and scheduled data collection
-* `runethorbek/dealradar` — web application, database, product evaluation, and later notifications
+* `runethorbek/dealradar` — web application, database, product evaluation, recommendations, and Slack notifications
 
 ## Architecture
 
@@ -24,9 +24,7 @@ Neon PostgreSQL
     ↓
 Gemini evaluation
     ↓
-DealRadar web UI
-    ↓
-Later: Slack notifications
+DealRadar web UI and Slack notifications
 ```
 
 ## 1. Scrapers
@@ -58,6 +56,8 @@ vinted-latest.json
 ```
 
 Each JSON file contains information such as product URL, title, image, price, discount, source-specific data, and the time the scan was performed.
+
+`deals` also owns the monitor configuration (`config/monitors.json`): what each monitor searches for and, per monitor, its recommendation strategy and threshold. It publishes these as `public/deals/monitor-recommendations.json`, which DealRadar imports. See `docs/import-contract.md`.
 
 ## 2. GitHub Actions
 
@@ -143,8 +143,11 @@ It then:
 * preserves the original JSON in `raw_data`
 * records price/history snapshots
 * avoids duplicate snapshots for the same product and observation timestamp
+* stores the published monitor definitions
 * identifies new or meaningfully changed products
 * can evaluate products using Gemini
+* records Watched alerts
+* triggers the Slack notifications, directly or through the durable evaluation Workflow (see [Slack notifications](#slack-notifications))
 
 ## 5. Neon database
 
@@ -175,6 +178,8 @@ Important fields include:
 * brand
 * first seen
 * last seen
+* Watched and Hidden state
+* monitor IDs (`monitor_ids`) the product was found through
 * complete original source object in `raw_data`
 
 A product is uniquely identified by:
@@ -229,7 +234,15 @@ evaluated_at
 
 `deal_score` indicates how strong the current price/deal appears to be.
 
-DealRadar can derive an overall ranking from these scores in the UI.
+DealRadar derives the Overall score from these scores, weighted by the ranking setting.
+
+### Other tables
+
+* `application_settings` — Vinted preselection, Gemini evaluation limits, preferred brands, and ranking weights
+* `evaluation_runs` and `evaluation_run_candidates` — durable evaluation runs
+* `monitor_definitions` — monitor definitions imported from `deals`
+* `daily_summaries` — one Daily summary per date, for idempotent delivery
+* `watched_alerts` — Watched alerts and their delivery state
 
 ## 6. Gemini
 
@@ -242,8 +255,8 @@ Instead, each evaluation can receive context from DealRadar, including:
 ```text
 - current product data
 - preference profile
-- recent likes/dislikes
-- product price history
+- recent price snapshots
+- the Vinted listing text, when present
 - matched Vinted monitor IDs, when present, as non-authoritative discovery context
 ```
 
@@ -379,6 +392,26 @@ Vercel
 Purpose:
 
 Used server-side to call the Google Gemini API.
+
+---
+
+```text
+SLACK_BOT_TOKEN
+SLACK_CHANNEL_ID
+```
+
+Location:
+
+```text
+Vercel
+→ DealRadar project
+→ Settings
+→ Environment Variables
+```
+
+Purpose:
+
+Used server-side to post DealRadar's Slack messages to one channel. If either is missing, Slack delivery fails with `not_configured`, and the import still succeeds.
 
 ### GitHub — `deals` repository
 
@@ -580,44 +613,25 @@ Responsible for:
 * preference profile
 * Gemini evaluations
 * ranking
+* monitor recommendations (Daily summary) and Watched alerts
 * web UI
-* future notifications
+* Slack notifications
 
 Keeping these responsibilities separate is intentional.
 
-## Planned Slack integration
+## Slack notifications
 
-Slack is intended to be the notification layer rather than part of the scraping pipeline.
+Slack is the notification layer. It is not part of the scraping pipeline. DealRadar sends three kinds of messages:
 
-Possible flow:
+* **Per-import message**: operational only, with import counts and scan warnings. It names no products.
+* **Daily summary**: once per day, one entry per Active monitor with its Best match, or the reason it has none.
+* **Watched alert**: when a Watched product crosses its monitor's discount threshold, reaches a new best discount, or reaches a historical low.
 
-```text
-new/changed product
-    ↓
-Gemini evaluation
-    ↓
-high preference score + strong deal score
-    ↓
-Slack notification
-```
+The rules are in `docs/recommendation-policy.md` and the terms in `docs/ubiquitous-language.md`.
 
-A Slack action could later trigger a GitHub Action for operations such as:
+A Slack delivery failure never fails an import. The Daily summary and Watched alerts are retried on a later delivery attempt without duplicates.
 
-```text
-Rescan Zalando now
-Rescan Vinted now
-```
-
-That would use:
-
-```text
-Slack
-→ DealRadar
-→ GitHub Actions
-→ scraper
-→ JSON
-→ DealRadar
-```
+Not implemented: triggering a rescan from Slack.
 
 ## Useful mental model
 

@@ -235,7 +235,7 @@ distinct and must not be conflated:
 See:
 
 - `docs/ubiquitous-language.md`
-- future evaluation/ranking documentation
+- `docs/recommendation-policy.md`
 
 for score semantics.
 
